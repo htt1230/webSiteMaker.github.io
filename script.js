@@ -18,6 +18,8 @@ const regionPresets = {
 };
 const widths = {desktop:960, mobile:390};
 const storageKey = "sitecanvas-v1";
+const saveInterval = 60000;
+const savedTimeFormat = new Intl.DateTimeFormat("ja-JP",{dateStyle:"short",timeStyle:"medium"});
 const fontOptions = {sans:"ゴシック", serif:"明朝", mono:"等幅"};
 const fonts = {
   sans:'"BIZ UDPGothic","Hiragino Sans","Yu Gothic",Meiryo,system-ui,sans-serif',
@@ -34,6 +36,7 @@ let scale = 1, gesture, imageRequest, statusTimer;
 let codeBase = "";
 let previewSource, sourceDocument, previewRevision = 0;
 let sourceScroll;
+let pendingField;
 
 function id() {
   return "item-" + (globalThis.crypto?.randomUUID?.() || Math.random().toString(36).slice(2));
@@ -106,22 +109,26 @@ function boundedRect(raw,width,height) {
     padding:readSpacing(raw?.padding),margin:readSpacing(raw?.margin,-8000)
   };
 }
-function readProject(raw, getImage) {
+function readProject(raw, getImage, keepIds = false) {
   if (raw?.version !== 1 || !Array.isArray(raw.items) || raw.items.length > 500) {
     throw new Error("SiteCanvasから書き出したHTMLを選んでください。");
   }
   const result = blank();
   result.title = typeof raw.title === "string" ? raw.title.slice(0,160) : result.title;
+  if (typeof raw.fileName === "string") result.fileName = raw.fileName;
   if (typeof raw.source === "string") return {...result,source:raw.source};
   result.background = safeColor(raw.background,result.background);
   for (const name of Object.keys(widths)) {
     result.heights[name] = number(raw.heights?.[name],result.heights[name],300,8000);
   }
+  const ids = new Set();
   for (const item of raw.items) {
     if (!item || !Object.hasOwn(types,item.type)) continue;
     const data = make(item.type,
       boundedRect(item.desktop,widths.desktop,result.heights.desktop),
       boundedRect(item.mobile,widths.mobile,result.heights.mobile));
+    if (keepIds && typeof item.id === "string" && /^item-[a-z0-9-]+$/i.test(item.id) && !ids.has(item.id)) data.id = item.id;
+    ids.add(data.id);
     data.text = typeof item.text === "string" ? item.text.slice(0,4000) : data.text;
     data.alt = typeof item.alt === "string" ? item.alt.slice(0,500) : "";
     data.color = safeColor(item.color,data.color);
@@ -136,23 +143,70 @@ function readProject(raw, getImage) {
   }
   return result;
 }
-function load() {
+function loadWorkspace() {
   try {
-    const saved = localStorage.getItem(storageKey);
-    if (saved) return readProject(JSON.parse(saved));
+    const content = localStorage.getItem(storageKey);
+    if (content) {
+      const saved = JSON.parse(content);
+      return {
+        project:readProject(saved.project ?? saved,undefined,true),
+        editor:saved.editor ?? {},
+        savedAt:Number.isFinite(Date.parse(saved.savedAt)) ? saved.savedAt : null
+      };
+    }
   } catch {}
-  return example();
+  return {project:example(),editor:{},savedAt:null};
 }
-let project = load();
+const workspace = loadWorkspace();
+let project = workspace.project;
+view = workspace.editor.view === "mobile" ? "mobile" : "desktop";
+const restoredSelection = workspace.editor.selected;
+if (typeof project.source === "string") {
+  if (typeof restoredSelection === "string" && /^(?:\d+(?:\.\d+)*)?$/.test(restoredSelection)) selected = restoredSelection;
+} else {
+  selected = project.items.find(item => item.id === restoredSelection)?.id ?? null;
+}
+let showFiles = workspace.editor.showFiles === true;
+let lastSavedAt = workspace.savedAt;
+let savePending = false;
+let saveError = false;
 
 function status(message) {
   byId("status").textContent = message;
   clearTimeout(statusTimer);
   statusTimer = setTimeout(() => { byId("status").textContent = ""; },4000);
 }
-function save() {
-  try { localStorage.setItem(storageKey,JSON.stringify(project)); }
-  catch { status("ブラウザに自動保存できません。HTMLを書き出して保存してください。"); }
+function renderSaveStatus() {
+  const label = byId("save-state");
+  const message = saveError ? "ローカルに保存できません" : savePending ? "自動保存待ち" :
+    lastSavedAt ? "ローカルに保存済み" : "最終保存時刻なし";
+  if (label.textContent !== message) label.textContent = message;
+  label.dataset.error = String(saveError);
+  byId("save-time").hidden = !lastSavedAt;
+  if (lastSavedAt) {
+    const time = byId("saved-at");
+    time.dateTime = lastSavedAt;
+    time.textContent = savedTimeFormat.format(new Date(lastSavedAt));
+  }
+}
+function queueSave() {
+  if (savePending) return;
+  savePending = true;
+  renderSaveStatus();
+}
+function flushSave() {
+  if (pendingField?.isConnected) pendingField.dispatchEvent(new Event("change",{bubbles:true}));
+  if (!savePending) return;
+  const savedAt = new Date().toISOString();
+  const editor = {view,selected,showFiles,codeOpen:!codePanel.hidden,draft:codeDirty() ? sourceCode.value : null};
+  try {
+    localStorage.setItem(storageKey,JSON.stringify({project,editor,savedAt}));
+    lastSavedAt = savedAt;
+    savePending = saveError = false;
+  } catch {
+    saveError = true;
+  }
+  renderSaveStatus();
 }
 function snapshot() {
   return {project:structuredClone(project),selected};
@@ -161,7 +215,7 @@ function record(before) {
   past.push(before);
   if (past.length > 50) past.shift();
   future.length = 0;
-  save();
+  queueSave();
 }
 function change(update) {
   const before = snapshot();
@@ -173,7 +227,7 @@ function restore(from,to) {
   if (!from.length) return;
   to.push(snapshot());
   ({project,selected} = from.pop());
-  save();
+  queueSave();
   render();
 }
 function itemSelected() {
@@ -192,6 +246,7 @@ function footerAtBottom(item,position) {
 function select(which) {
   if (selected === which) return;
   selected = which;
+  queueSave();
   render();
 }
 function textStyle(item) {
@@ -275,7 +330,7 @@ function renderLayers() {
   byId("add-heading").hidden = usesSource;
   byId("add-tools").hidden = usesSource;
   byId("layer-tools").hidden = usesSource;
-  byId("layers-heading").textContent = usesSource ? "HTML 要素" : "レイヤー";
+  byId("layers-tab").textContent = usesSource ? "HTML 要素" : "レイヤー";
   byId("canvas-help").textContent = usesSource ? "キャンバスまたは HTML 要素の一覧から選択" : "ドラッグで移動 · 角のつまみでサイズ変更";
   if (usesSource) {
     renderSourceLayers();
@@ -314,6 +369,7 @@ function renderHistory() {
 function render() {
   renderArt();
   renderLayers();
+  renderFilePanel();
   renderProperties();
   refreshCode();
   renderHistory();
@@ -334,7 +390,8 @@ function field(name, kind, value, update, options = {}) {
   }
   if (kind === "checkbox") input.checked = value;
   else input.value = value;
-  input.addEventListener("change",() => {
+  function commit() {
+    if (pendingField === input) pendingField = undefined;
     const next = kind === "checkbox" ? input.checked : kind === "number" ? input.valueAsNumber : input.value;
     const before = snapshot();
     const actual = update(next);
@@ -343,10 +400,16 @@ function field(name, kind, value, update, options = {}) {
       record(before);
       renderArt();
       renderLayers();
+      renderFilePanel();
       refreshCode();
       renderHistory();
     }
+  }
+  input.addEventListener("input",() => {
+    pendingField = input;
+    queueSave();
   });
+  input.addEventListener("change",commit);
   label.append(input);
   return label;
 }
@@ -601,6 +664,7 @@ sheet.addEventListener("pointermove",event => {
   const position = {...gesture.position};
   offsetGeometry(position,dx,dy,gesture.resize,gesture.fromTop);
   gesture.item[gesture.view] = position;
+  queueSave();
   const element = sheet.querySelector(".selected");
   Object.assign(element.style,{left:position.x+"px",top:position.y+"px",
     width:position.w+"px",height:position.h+"px"});
@@ -609,7 +673,10 @@ function finishGesture(event,cancelled) {
   if (gesture?.pointer !== event.pointerId) return;
   const current = gesture;
   gesture = null;
-  if (cancelled) current.item[current.view] = current.position;
+  if (cancelled) {
+    current.item[current.view] = current.position;
+    queueSave();
+  }
   if (JSON.stringify(current.item[current.view]) !== JSON.stringify(current.position)) record(current.before);
   render();
 }
@@ -704,10 +771,125 @@ function serializeHTML(page) {
   const serializer = new XMLSerializer();
   return Array.from(page.childNodes,node => node.outerHTML ?? serializer.serializeToString(node)).join("\n");
 }
-function projectFromSource(source) {
+function projectFromSource(source,fileName) {
   const title = parseHTML(source).title.trim().slice(0,160) || "無題のサイト";
-  return {...blank(),title,source};
+  return {...blank(),title,source,fileName};
 }
+function downloadFilename() {
+  const safeName = (project.fileName || project.title).trim().replace(/[\\/:*?"<>|\u0000-\u001f]/g,"-").replace(/[. ]+$/,"");
+  return project.fileName && /\.html?$/i.test(safeName) ? safeName : (safeName || "index") + ".html";
+}
+function fileDirectory() {
+  return {folders:new Map(),files:new Map()};
+}
+function addFileReference(directory,reference) {
+  const value = reference.trim();
+  if (!value || /^[?#]/.test(value)) return;
+  let path = value.split(/[?#]/,1)[0];
+  if (/^(?:https?:)?\/\//i.test(value)) {
+    try {
+      const url = new URL(value,"https://sitecanvas.invalid/");
+      path = "外部参照/" + url.host + (url.pathname === "/" ? "/" + url.host : url.pathname);
+    } catch { return; }
+  } else if (/^[a-z][a-z0-9+.-]*:/i.test(value)) return;
+  const parts = path.split("/").filter(part => part && part !== ".");
+  const filename = parts.pop();
+  if (!filename) return;
+  for (const folder of parts) {
+    if (!directory.folders.has(folder)) directory.folders.set(folder,fileDirectory());
+    directory = directory.folders.get(folder);
+  }
+  directory.files.set(filename,value);
+}
+function sourceFiles(source) {
+  const template = document.createElement("template");
+  template.innerHTML = source;
+  const page = template.content;
+  const directory = fileDirectory();
+  const embedded = new Set();
+  const reference = value => {
+    if (/^data:/i.test(value.trim())) embedded.add(value.trim());
+    else addFileReference(directory,value);
+  };
+  for (const element of page.querySelectorAll("[src],video[poster],[srcset],link[href],a[href]")) {
+    for (const name of ["src","poster"]) {
+      if (element.hasAttribute(name)) reference(element.getAttribute(name));
+    }
+    const href = element.getAttribute("href");
+    if (href && (element.localName === "link" || /\.[a-z\d]+(?:[?#]|$)/i.test(href))) reference(href);
+    const srcset = element.getAttribute("srcset") ?? "";
+    for (const match of srcset.matchAll(/(?:^|,)\s*(data:\S+|[^,\s]+)(?:\s+[^,]*)?/gi)) reference(match[1]);
+  }
+  const styles = Array.from(page.querySelectorAll("style"),node => node.textContent);
+  const inlineStyles = Array.from(page.querySelectorAll("[style]"),node => node.getAttribute("style"));
+  for (const css of [...styles,...inlineStyles]) {
+    for (const match of css.replace(/\/\*[\s\S]*?\*\//g,"").matchAll(/\burl\(\s*(?:"([^"]*)"|'([^']*)'|([^\s)]+))\s*\)|@import\s+(?:"([^"]*)"|'([^']*)')/gi)) {
+      reference(match.slice(1).find(part => part !== undefined));
+    }
+  }
+  return {
+    directory,styles:styles.length,scripts:page.querySelectorAll("script:not([src])").length,embedded:embedded.size
+  };
+}
+function fileEntry(name,title,open) {
+  const row = document.createElement(open ? "button" : "span");
+  row.className = "file-entry";
+  row.textContent = name;
+  if (title) row.title = title;
+  if (open) row.addEventListener("click",open);
+  const item = document.createElement("li");
+  item.append(row);
+  return item;
+}
+function fileFolder(name,entries,open) {
+  const title = document.createElement("summary");
+  title.textContent = name;
+  const details = document.createElement("details");
+  details.open = open;
+  details.append(title,entries);
+  const item = document.createElement("li");
+  item.append(details);
+  return item;
+}
+function fileEntries(directory,depth = 0) {
+  const list = document.createElement("ul");
+  for (const [name,folder] of directory.folders) list.append(fileFolder(name,fileEntries(folder,depth+1),depth < 2));
+  for (const [name,path] of directory.files) list.append(fileEntry(name,path));
+  return list;
+}
+let renderedFiles;
+function renderFilePanel() {
+  byId("layers-panel").hidden = showFiles;
+  byId("files-panel").hidden = !showFiles;
+  byId("layers-tab").setAttribute("aria-pressed",String(!showFiles));
+  byId("files-tab").setAttribute("aria-pressed",String(showFiles));
+  if (!showFiles) return;
+  const fileName = downloadFilename(), source = project.source;
+  const images = project.items.filter(item => item.type === "image" && item.src).length;
+  if (renderedFiles?.fileName === fileName && renderedFiles.source === source && renderedFiles.images === images) return;
+  renderedFiles = {fileName,source,images};
+  const files = typeof source === "string" ? sourceFiles(source) : {styles:1,scripts:0,embedded:images};
+  const tree = document.createElement("ul");
+  const html = fileEntry(fileName,"HTML をコードで開く",() => openCode(true));
+  const parts = document.createElement("ul");
+  if (files.styles) parts.append(fileEntry("埋め込み CSS（" + files.styles + "件）"));
+  if (files.scripts) parts.append(fileEntry("埋め込みスクリプト（" + files.scripts + "件）"));
+  if (files.embedded) parts.append(fileEntry("埋め込みデータ（" + files.embedded + "件）"));
+  if (parts.childElementCount) html.append(parts);
+  tree.append(html);
+  if (files.directory && (files.directory.folders.size || files.directory.files.size)) {
+    tree.append(fileFolder("参照ファイル",fileEntries(files.directory),true));
+  }
+  byId("file-tree").replaceChildren(tree);
+}
+function setFilePanel(files) {
+  if (showFiles === files) return;
+  showFiles = files;
+  renderFilePanel();
+  queueSave();
+}
+byId("layers-tab").addEventListener("click",() => setFilePanel(false));
+byId("files-tab").addEventListener("click",() => setFilePanel(true));
 function previewHTML(source,revision) {
   const page = parseHTML(source);
   for (const refresh of page.querySelectorAll('meta[http-equiv="refresh" i]')) refresh.removeAttribute("http-equiv");
@@ -880,7 +1062,7 @@ function updateCodeControls() {
   byId("code-apply").disabled = !dirty || !sourceCode.value.trim();
   byId("code-reset").disabled = !dirty;
   for (const control of ["new","open","preview","export"]) byId(control).disabled = dirty;
-  for (const area of [".panel.left",".panel.right",".viewport"]) document.querySelector(area).inert = dirty;
+  for (const area of ["#add-tools","#layers-panel",".panel.right",".viewport"]) document.querySelector(area).inert = dirty;
   byId("code-help").textContent = dirty ? "キャンバスで編集を続けるには、コードを反映するか変更を破棄してください。" :
     typeof project.source === "string" ? "HTML と CSS の変更は「コードを反映」でキャンバスに表示されます。" :
     "コードを反映すると、レイヤー編集から HTML タグの編集に切り替わります。";
@@ -894,28 +1076,40 @@ function refreshCode() {
   }
   updateCodeControls();
 }
+function setCodePanel(open) {
+  codePanel.hidden = !open;
+  codeToggle.setAttribute("aria-pressed",String(open));
+  if (open) refreshCode();
+}
+function openCode(focus) {
+  if (codePanel.hidden) {
+    setCodePanel(true);
+    queueSave();
+  }
+  if (focus) sourceCode.focus();
+}
 codeToggle.addEventListener("click",() => {
-  codePanel.hidden = !codePanel.hidden;
-  codeToggle.setAttribute("aria-pressed",String(!codePanel.hidden));
-  if (!codePanel.hidden) {
-    refreshCode();
-    sourceCode.focus();
+  if (codePanel.hidden) openCode(true);
+  else {
+    setCodePanel(false);
+    queueSave();
   }
 });
-sourceCode.addEventListener("input",() => { updateCodeControls(); renderHistory(); });
+sourceCode.addEventListener("input",() => { queueSave(); updateCodeControls(); renderHistory(); });
 byId("code-reset").addEventListener("click",() => {
   sourceCode.value = codeBase;
+  queueSave();
   refreshCode();
   renderHistory();
 });
 byId("code-apply").addEventListener("click",() => {
-  const next = projectFromSource(sourceCode.value);
+  const next = projectFromSource(sourceCode.value,project.fileName);
   codeBase = sourceCode.value;
   change(() => { project = next; selected = null; });
   status("コードをキャンバスに反映しました。");
 });
 function download() {
-  const filename = (project.title.trim().replace(/[\\/:*?"<>|\u0000-\u001f]/g,"-").replace(/[. ]+$/,"") || "index") + ".html";
+  const filename = downloadFilename();
   const url = URL.createObjectURL(new Blob([exportHTML()],{type:"text/html;charset=utf-8"}));
   const link = document.createElement("a");
   link.href = url;
@@ -999,8 +1193,9 @@ byId("file-open").addEventListener("change",async event => {
       }
       next = readProject(JSON.parse(metadata.textContent),key => images.get(key));
     } else {
-      next = projectFromSource(source);
+      next = projectFromSource(source,file.name);
     }
+    next.fileName = file.name;
     change(() => { project = next; selected = null; });
     status("HTMLを開きました。");
   } catch (error) {
@@ -1022,7 +1217,12 @@ byId("add-tools").addEventListener("click",event => {
   else add(button.dataset.add);
 });
 for (const control of document.querySelectorAll("[data-view]")) {
-  control.addEventListener("click",() => { view = control.dataset.view; render(); });
+  control.addEventListener("click",() => {
+    if (view === control.dataset.view) return;
+    view = control.dataset.view;
+    queueSave();
+    render();
+  });
 }
 for (const control of dialog.querySelectorAll("[data-preview]")) {
   control.addEventListener("click",() => setPreview(control.dataset.preview));
@@ -1053,4 +1253,14 @@ document.addEventListener("keydown",event => {
 });
 new ResizeObserver(fit).observe(viewport);
 new ResizeObserver(fitPreview).observe(previewFrame);
+if (workspace.editor.codeOpen === true || typeof workspace.editor.draft === "string") {
+  setCodePanel(true);
+  if (typeof workspace.editor.draft === "string") sourceCode.value = workspace.editor.draft;
+}
 render();
+renderSaveStatus();
+setInterval(flushSave,saveInterval);
+window.addEventListener("pagehide",flushSave);
+document.addEventListener("visibilitychange",() => {
+  if (document.visibilityState === "hidden") flushSave();
+});

@@ -17,7 +17,7 @@
   </div>
 </header>
 <main class="editor">
-  <aside class="panel left" aria-label="追加とレイヤー">
+  <aside class="panel left" aria-label="要素・レイヤー・ファイル">
     <h2 id="add-heading">要素を追加</h2>
     <div class="add-grid" id="add-tools">
       <button class="action" data-add="text"><span class="add-icon" aria-hidden="true">T</span>テキスト</button>
@@ -27,14 +27,20 @@
       <button class="action" data-add="header"><span class="region-icon" aria-hidden="true"></span>ヘッダー</button>
       <button class="action" data-add="footer"><span class="region-icon" aria-hidden="true"></span>フッター</button>
     </div>
-    <div class="panel-heading layers-title">
-      <h2 id="layers-heading">レイヤー</h2>
-      <div class="tools" id="layer-tools">
+    <div class="switch sidebar-switch" aria-label="左パネルの表示">
+      <button class="action" id="layers-tab" aria-controls="layers-panel" aria-pressed="true">レイヤー</button>
+      <button class="action" id="files-tab" aria-controls="files-panel" aria-pressed="false">ファイル</button>
+    </div>
+    <section id="layers-panel" aria-labelledby="layers-tab">
+      <div class="tools layer-tools" id="layer-tools">
         <button class="action icon-button" id="front" title="前面へ一段移動" aria-label="前面へ一段移動">↑</button>
         <button class="action icon-button" id="back" title="背面へ一段移動" aria-label="背面へ一段移動">↓</button>
       </div>
-    </div>
-    <div class="layers" id="layers"></div>
+      <div class="layers" id="layers"></div>
+    </section>
+    <section id="files-panel" aria-labelledby="files-tab" hidden>
+      <div class="file-tree" id="file-tree"></div>
+    </section>
   </aside>
   <section class="stage" aria-label="キャンバス">
     <div class="stagebar">
@@ -56,6 +62,10 @@
           </svg>
         </button>
       </div>
+    </div>
+    <div class="save-strip">
+      <span id="save-state" role="status"></span>
+      <span id="save-time" hidden>最終保存 <time id="saved-at"></time></span>
     </div>
     <section id="code-panel" class="code-panel" aria-labelledby="code-heading" hidden>
       <div class="code-bar">

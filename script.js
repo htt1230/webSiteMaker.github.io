@@ -7,6 +7,9 @@ const shell = byId("shell");
 const properties = byId("properties");
 const sourceSheet = byId("source-sheet");
 const sourceOutline = byId("source-outline");
+const inspectBox = byId("inspect-box");
+const inspectTooltip = byId("inspect-tooltip");
+const inspectToggle = byId("inspect-toggle");
 const sourceCode = byId("source-code");
 const codePanel = byId("code-panel");
 const codeToggle = byId("code-toggle");
@@ -20,6 +23,7 @@ const widths = {desktop:960, mobile:390};
 const storageKey = "sitecanvas-v1";
 const saveInterval = 60000;
 const savedTimeFormat = new Intl.DateTimeFormat("ja-JP",{dateStyle:"short",timeStyle:"medium"});
+const sizeFormat = new Intl.NumberFormat("ja-JP",{maximumFractionDigits:2});
 const fontOptions = {sans:"ゴシック", serif:"明朝", mono:"等幅"};
 const fonts = {
   sans:'"BIZ UDPGothic","Hiragino Sans","Yu Gothic",Meiryo,system-ui,sans-serif',
@@ -37,6 +41,10 @@ let codeBase = "";
 let previewSource, sourceDocument, previewRevision = 0;
 let sourceScroll;
 let pendingField;
+let inspectMode = false;
+let inspectedPath = null;
+let hoveredElement = null;
+const inspectorSections = new Map();
 
 function id() {
   return "item-" + (globalThis.crypto?.randomUUID?.() || Math.random().toString(36).slice(2));
@@ -160,9 +168,14 @@ function loadWorkspace() {
 const workspace = loadWorkspace();
 let project = workspace.project;
 view = workspace.editor.view === "mobile" ? "mobile" : "desktop";
+inspectMode = workspace.editor.inspectMode === true;
+function isTagPath(value) {
+  return typeof value === "string" && /^(?:\d+(?:\.\d+)*)?$/.test(value);
+}
+if (isTagPath(workspace.editor.inspectedPath)) inspectedPath = workspace.editor.inspectedPath;
 const restoredSelection = workspace.editor.selected;
 if (typeof project.source === "string") {
-  if (typeof restoredSelection === "string" && /^(?:\d+(?:\.\d+)*)?$/.test(restoredSelection)) selected = restoredSelection;
+  if (isTagPath(restoredSelection)) selected = restoredSelection;
 } else {
   selected = project.items.find(item => item.id === restoredSelection)?.id ?? null;
 }
@@ -198,7 +211,7 @@ function flushSave() {
   if (pendingField?.isConnected) pendingField.dispatchEvent(new Event("change",{bubbles:true}));
   if (!savePending) return;
   const savedAt = new Date().toISOString();
-  const editor = {view,selected,showFiles,codeOpen:!codePanel.hidden,draft:codeDirty() ? sourceCode.value : null};
+  const editor = {view,selected,showFiles,inspectMode,inspectedPath,codeOpen:!codePanel.hidden,draft:codeDirty() ? sourceCode.value : null};
   try {
     localStorage.setItem(storageKey,JSON.stringify({project,editor,savedAt}));
     lastSavedAt = savedAt;
@@ -225,8 +238,13 @@ function change(update) {
 }
 function restore(from,to) {
   if (!from.length) return;
+  const fromSource = typeof project.source === "string";
   to.push(snapshot());
   ({project,selected} = from.pop());
+  if (fromSource && typeof project.source !== "string") {
+    inspectMode = false;
+    inspectedPath = hoveredElement = null;
+  }
   queueSave();
   render();
 }
@@ -258,7 +276,7 @@ function textStyle(item) {
   };
 }
 function renderArt() {
-  const usesSource = typeof project.source === "string";
+  const usesSource = tagCanvas();
   sheet.hidden = usesSource;
   sourceSheet.hidden = !usesSource;
   if (usesSource) {
@@ -270,6 +288,7 @@ function renderArt() {
     previewSource = sourceDocument = sourceScroll = undefined;
     sourceSheet.removeAttribute("srcdoc");
     sourceOutline.hidden = true;
+    showInspection(null);
   }
   sheet.style.width = widths[view] + "px";
   sheet.style.height = project.heights[view] + "px";
@@ -326,12 +345,13 @@ function fit() {
   byId("stage-size").textContent = widths[view] + " × " + project.heights[view] + " px · " + Math.round(scale * 100) + "%";
 }
 function renderLayers() {
-  const usesSource = typeof project.source === "string";
+  const usesSource = tagCanvas();
   byId("add-heading").hidden = usesSource;
   byId("add-tools").hidden = usesSource;
   byId("layer-tools").hidden = usesSource;
   byId("layers-tab").textContent = usesSource ? "HTML 要素" : "レイヤー";
-  byId("canvas-help").textContent = usesSource ? "キャンバスまたは HTML 要素の一覧から選択" : "ドラッグで移動 · 角のつまみでサイズ変更";
+  byId("canvas-help").textContent = inspectMode ? "要素にカーソルを合わせて確認 · クリックで選択" :
+    usesSource ? "キャンバスまたは HTML 要素の一覧から選択" : "ドラッグで移動 · 角のつまみでサイズ変更";
   if (usesSource) {
     renderSourceLayers();
     return;
@@ -367,6 +387,7 @@ function renderHistory() {
   byId("redo").disabled = dirty || future.length === 0;
 }
 function render() {
+  inspectToggle.setAttribute("aria-pressed",String(inspectMode));
   renderArt();
   renderLayers();
   renderFilePanel();
@@ -480,7 +501,7 @@ function resizePage(value) {
   return next;
 }
 function renderProperties() {
-  if (typeof project.source === "string") {
+  if (tagCanvas()) {
     renderSourceProperties();
     return;
   }
@@ -900,16 +921,46 @@ function previewHTML(source,revision) {
   page.head.prepend(policy);
   return serializeHTML(page);
 }
+function tagCanvas() {
+  return inspectMode || typeof project.source === "string";
+}
+function selectedTagPath() {
+  return typeof project.source === "string" ? selected : inspectedPath;
+}
+function pickSource(path) {
+  if (typeof project.source === "string") {
+    select(path);
+    return;
+  }
+  if (inspectedPath !== path) queueSave();
+  inspectedPath = path;
+  const target = sourceElement(sourceDocument,path);
+  const id = project.items.find(item => item.id === target?.id)?.id ?? null;
+  if (selected !== id) { selected = id; queueSave(); }
+  renderSourceLayers();
+  renderSourceProperties();
+  highlightSource();
+}
+function toggleInspection() {
+  inspectMode = !inspectMode;
+  inspectedPath = hoveredElement = null;
+  queueSave();
+  render();
+}
+inspectToggle.addEventListener("click",toggleInspection);
 function renderSourceSheet() {
-  if (previewSource === project.source) return;
-  if (selected === null) sourceScroll = undefined;
+  const source = project.source ?? exportHTML(false);
+  if (previewSource === source) return;
+  if (selectedTagPath() === null) sourceScroll = undefined;
   else if (sourceDocument) {
     const {scrollLeft,scrollTop} = sourceDocument.scrollingElement;
     sourceScroll = [scrollLeft,scrollTop];
   }
-  previewSource = project.source;
+  previewSource = source;
   sourceDocument = undefined;
+  hoveredElement = null;
   sourceOutline.hidden = true;
+  showInspection(null);
   sourceSheet.srcdoc = previewHTML(previewSource,++previewRevision);
 }
 function sourceElement(page,path) {
@@ -926,7 +977,7 @@ function pathFor(element) {
   return indexes.reverse().join(".");
 }
 function inspectable(element) {
-  return element.style && !["link","meta","script","style","template"].includes(element.localName);
+  return element?.style && !["link","meta","script","style","template"].includes(element.localName);
 }
 function sourceLabel(element) {
   return "<" + element.localName + ">" + (element.id ? " #" + element.id : "");
@@ -946,7 +997,7 @@ function renderSourceLayers() {
     row.className = "layer tag-row";
     const depth = path ? path.split(".").length : 0;
     row.style.setProperty("--depth",Math.min(depth,8));
-    row.setAttribute("aria-pressed",String(path === selected));
+    row.setAttribute("aria-pressed",String(path === selectedTagPath()));
     row.dataset.path = path;
     row.title = sourceLabel(element);
     const name = document.createElement("span");
@@ -954,9 +1005,11 @@ function renderSourceLayers() {
     row.append(name);
     row.addEventListener("click",() => {
       element.scrollIntoView({block:"nearest",inline:"nearest",container:"nearest"});
-      select(path);
+      pickSource(path);
       highlightSource();
     });
+    row.addEventListener("pointerenter",() => hoverSource(element));
+    row.addEventListener("pointerleave",() => hoverSource(null));
     return row;
   });
   layers.replaceChildren(...rows);
@@ -964,7 +1017,8 @@ function renderSourceLayers() {
   rows.find(row => row.dataset.path === focusedPath)?.focus({preventScroll:true});
 }
 function highlightSource() {
-  const element = sourceElement(sourceDocument,selected);
+  const element = sourceElement(sourceDocument,selectedTagPath());
+  showInspection(inspectMode ? hoveredElement : null);
   if (!element) {
     sourceOutline.hidden = true;
     return;
@@ -978,23 +1032,114 @@ function highlightSource() {
     left:left*scale+"px",top:top*scale+"px",width:(right-left)*scale+"px",height:(bottom-top)*scale+"px"
   });
 }
+function metricsList(rows) {
+  const list = document.createElement("dl");
+  list.className = "inspect-metrics";
+  for (const [name,value,clip] of rows) {
+    const term = document.createElement("dt"), detail = document.createElement("dd");
+    term.textContent = name;
+    detail.textContent = value;
+    if (clip) { detail.className = "clip"; detail.title = value; }
+    list.append(term,detail);
+  }
+  return list;
+}
+function boxSize(box) {
+  return sizeFormat.format(box.width) + " × " + sizeFormat.format(box.height) + " px";
+}
+function hoverSource(element) {
+  if (!inspectMode || hoveredElement === element) return;
+  hoveredElement = element;
+  showInspection(element);
+}
+function paintInspection(box,css) {
+  const lengths = (key,suffix = "") => ["top","right","bottom","left"].map(side => Math.max(0,parseFloat(css.getPropertyValue(key+"-"+side+suffix)) || 0));
+  const margin = lengths("margin"), border = lengths("border","-width"), padding = lengths("padding");
+  const outer = {left:box.left-margin[3],top:box.top-margin[0],right:box.right+margin[1],bottom:box.bottom+margin[2]};
+  for (const [index,edges] of [margin,border,padding,[0,0,0,0]].entries()) {
+    const [top,right,bottom,left] = edges;
+    Object.assign(inspectBox.children[index].style,{
+      left:outer.left*scale+"px",top:outer.top*scale+"px",
+      width:Math.max(0,outer.right-outer.left)*scale+"px",height:Math.max(0,outer.bottom-outer.top)*scale+"px",
+      borderWidth:edges.map(edge => edge*scale+"px").join(" ")
+    });
+    outer.left += left; outer.top += top; outer.right -= right; outer.bottom -= bottom;
+  }
+}
+function showInspection(element) {
+  const box = element?.isConnected ? element.getBoundingClientRect() : null;
+  const visible = box && box.width > 0 && box.height > 0 && box.right > 0 && box.bottom > 0 &&
+    box.left < sourceSheet.clientWidth && box.top < sourceSheet.clientHeight;
+  inspectBox.hidden = inspectTooltip.hidden = !visible;
+  if (!visible) return;
+  const css = element.ownerDocument.defaultView.getComputedStyle(element);
+  paintInspection(box,css);
+  const title = document.createElement("div");
+  title.className = "inspect-label";
+  const classes = Array.from(element.classList).slice(0,3).map(name => "."+name).join("");
+  title.textContent = element.localName + (element.id ? "#"+element.id : "") + classes;
+  const access = metricsList(accessibilityInfo(element,css));
+  access.classList.add("inspect-access");
+  inspectTooltip.replaceChildren(title,metricsList([
+    ["サイズ",boxSize(box)], ["position",css.position], ["display",css.display],
+    ["color",css.color], ["背景",css.backgroundColor], ["フォント",css.fontSize+" "+css.fontFamily,true],
+    ["padding",css.padding], ["margin",css.margin]
+  ]),access);
+  const frame = shell.getBoundingClientRect();
+  inspectTooltip.style.maxWidth = Math.min(shell.clientWidth,document.documentElement.clientWidth-16)+"px";
+  const maxLeft = Math.max(0,shell.clientWidth-inspectTooltip.offsetWidth);
+  const maxTop = Math.max(8-frame.top,window.innerHeight-frame.top-inspectTooltip.offsetHeight-8);
+  const above = Math.max(0,box.top*scale) - inspectTooltip.offsetHeight - 7;
+  const top = above + frame.top >= 8 ? above : box.bottom*scale + 7;
+  inspectTooltip.style.left = clamp(box.left*scale,0,maxLeft)+"px";
+  inspectTooltip.style.top = clamp(top,8-frame.top,maxTop)+"px";
+}
+function accessibilityInfo(element,css) {
+  const names = Array.from(element.labels ?? [],label => label.textContent.trim()).join(" ");
+  const labelled = (element.getAttribute("aria-labelledby") ?? "").split(/\s+/).map(id =>
+    element.ownerDocument.getElementById(id)?.textContent.trim()).filter(Boolean).join(" ");
+  const tag = element.localName;
+  const roles = {button:"button",summary:"button",nav:"navigation",main:"main",aside:"complementary",img:"img",ul:"list",ol:"list",li:"listitem",p:"paragraph",select:"combobox",textarea:"textbox",table:"table"};
+  const inputRoles = {checkbox:"checkbox",radio:"radio",range:"slider",number:"spinbutton",button:"button",submit:"button",reset:"button",image:"button",hidden:""};
+  let role = Object.hasOwn(roles,tag) ? roles[tag] : "";
+  if (tag === "a" && element.hasAttribute("href")) role = "link";
+  if (/^h[1-6]$/.test(tag)) role = "heading";
+  if (tag === "input") role = inputRoles[element.type] ?? "textbox";
+  if ((tag === "header" || tag === "footer") && !element.parentElement?.closest("article,aside,main,nav,section")) role = tag === "header" ? "banner" : "contentinfo";
+  role = element.getAttribute("role")?.trim().split(/\s+/)[0] || role;
+  const textName = ["button","link","heading"].includes(role) ? element.textContent.trim() || element.value : "";
+  const name = labelled || element.getAttribute("aria-label") || names || element.getAttribute("alt") || textName || element.title;
+  const focusable = element.tabIndex >= 0 && !element.matches(":disabled") && !element.closest("[inert]") &&
+    css.visibility === "visible" && element.getClientRects().length > 0;
+  return [["名前",name || "—",true],["ロール",role || "—"],["Tab フォーカス",focusable ? "可" : "不可"]];
+}
 function editSourceStyle(path,key,value) {
-  const page = parseHTML(project.source);
+  const page = parseHTML(project.source ?? exportHTML(false));
   const element = sourceElement(page,path);
   if (!element) return "";
-  const previous = element.style.getPropertyValue(key);
-  const previousPriority = element.style.getPropertyPriority(key);
+  const previous = element.getAttribute("style");
+  if (!CSS.supports(key,"initial")) {
+    status("CSS プロパティ名を確認してください。");
+    return "";
+  }
   const priority = /\s*!important\s*$/i.test(value) ? "important" : "";
   const input = value.replace(/\s*!important\s*$/i,"").trim();
-  const next = /^-?(?:\d+\.?\d*|\.\d+)$/.test(input) ? input + "px" : input;
+  const next = /^-?(?:\d+\.?\d*|\.\d+)$/.test(input) && !CSS.supports(key,input) && CSS.supports(key,input+"px") ? input+"px" : input;
   if (next && !CSS.supports(key,next)) {
     status("CSS の値を確認してください。例 24px、2rem、10%");
     return inlineStyleValue(element,key);
   }
-  if (next !== previous || priority !== previousPriority) {
+  if (next !== element.style.getPropertyValue(key) || priority !== element.style.getPropertyPriority(key)) {
     element.style.setProperty(key,next,priority);
     if (!element.style.length) element.removeAttribute("style");
-    project.source = serializeHTML(page);
+    if (element.getAttribute("style") !== previous) {
+      const source = serializeHTML(page);
+      if (typeof project.source === "string") project.source = source;
+      else {
+        project = projectFromSource(source,project.fileName);
+        selected = path;
+      }
+    }
   }
   return inlineStyleValue(element,key);
 }
@@ -1002,10 +1147,57 @@ function inlineStyleValue(element,key) {
   const value = element.style.getPropertyValue(key);
   return element.style.getPropertyPriority(key) ? value + " !important" : value;
 }
+function inspectorSection(name,open,...body) {
+  const details = document.createElement("details");
+  details.className = "inspector-section";
+  details.open = inspectorSections.get(name) ?? open;
+  const summary = document.createElement("summary");
+  summary.textContent = name;
+  details.append(summary,...body);
+  details.addEventListener("toggle",() => {
+    if (details.isConnected) inspectorSections.set(name,details.open);
+  });
+  return details;
+}
+function customStyleForm() {
+  const form = document.createElement("form");
+  form.className = "inspector-custom";
+  const control = (label,hint) => {
+    const wrapper = document.createElement("label");
+    wrapper.className = "field";
+    const input = document.createElement("input");
+    input.type = "text";
+    input.spellcheck = false;
+    input.placeholder = hint;
+    wrapper.append(label,input);
+    form.append(wrapper);
+    return input;
+  };
+  const key = control("プロパティ名","例 transform");
+  key.required = true;
+  const value = control("値","例 rotate(5deg)");
+  const apply = document.createElement("button");
+  apply.className = "action";
+  apply.textContent = "適用";
+  form.append(apply);
+  form.addEventListener("submit",event => {
+    event.preventDefault();
+    const name = key.value.trim();
+    const property = name.startsWith("--") ? name : name.toLowerCase();
+    const before = snapshot();
+    editSourceStyle(selectedTagPath(),property,value.value);
+    if (project.source !== before.project.source) {
+      record(before);
+      render();
+    }
+  });
+  return form;
+}
 function renderSourceProperties() {
   const heading = byId("properties-title");
-  const element = sourceElement(sourceDocument,selected);
-  heading.textContent = "要素のスタイル";
+  const path = selectedTagPath();
+  const element = sourceElement(sourceDocument,path);
+  heading.textContent = "CSS インスペクター";
   if (!element) {
     const help = document.createElement("p");
     help.className = "help";
@@ -1014,18 +1206,61 @@ function renderSourceProperties() {
     return;
   }
   const computed = sourceSheet.contentWindow.getComputedStyle(element);
-  const cssField = (name,key,accessibleName = name) => {
+  const known = new Set();
+  const cssField = (name,key = name,accessibleName = name,options) => {
+    known.add(key);
+    const computedValue = computed.getPropertyValue(key);
     const control = field(name,"text",inlineStyleValue(element,key),
-      value => editSourceStyle(selected,key,value),{placeholder:computed.getPropertyValue(key)});
-    control.querySelector("input").setAttribute("aria-label",accessibleName);
+      value => editSourceStyle(path,key,value),{placeholder:computedValue,spellcheck:false});
+    const input = control.querySelector("input");
+    input.setAttribute("aria-label",accessibleName);
+    if (computedValue) input.title = "計算値 " + computedValue;
+    if (options) {
+      const choices = document.createElement("datalist");
+      choices.id = "css-" + key + "-options";
+      for (const option of options) choices.append(new Option(option,option));
+      input.setAttribute("list",choices.id);
+      control.append(choices);
+    }
+    input.addEventListener("keydown",event => {
+      if (event.key === "Enter" && !event.isComposing) {
+        event.preventDefault();
+        input.dispatchEvent(new Event("change",{bubbles:true}));
+      }
+    });
     return control;
   };
+  const size = inspectorSection("サイズと余白",true,
+    boxModel(cssField("幅","width"),cssField("高さ","height"),
+      (key,side) => cssField(sides[side],key + "-" + side,key + " " + sides[side])),
+    group(cssField("min-width"),cssField("max-width")),
+    group(cssField("min-height"),cssField("max-height")),
+    cssField("box-sizing","box-sizing","box-sizing",["content-box","border-box"]),cssField("aspect-ratio"));
+  const position = inspectorSection("位置と重なり",true,
+    cssField("position","position","position",["static","relative","absolute","fixed","sticky"]),
+    group(cssField("top"),cssField("right")),group(cssField("bottom"),cssField("left")),cssField("z-index"));
+  if (computed.position === "absolute" || computed.position === "fixed") {
+    position.append(metricsList([["配置の基準",element.offsetParent ? sourceLabel(element.offsetParent) : "ビューポート"]]));
+  }
+  const layout = inspectorSection("表示・Flex・Grid",false,
+    cssField("display","display","display",["block","inline","inline-block","flex","inline-flex","grid","inline-grid","contents","none"]),
+    cssField("overflow","overflow","overflow",["visible","hidden","clip","auto","scroll"]),
+    group(cssField("gap"),cssField("flex-direction")),cssField("flex-wrap"),
+    cssField("justify-content"),cssField("align-items"),cssField("align-self"),
+    cssField("grid-template-columns"),cssField("grid-template-rows"),group(cssField("grid-column"),cssField("grid-row")));
+  const appearance = inspectorSection("文字と見た目",false,cssField("color"),cssField("background-color"),
+    group(cssField("font-size"),cssField("line-height")),cssField("font-family"),
+    cssField("border"),cssField("border-radius"),cssField("opacity"),cssField("transform"));
+  const extras = Array.from(element.style).filter(key => !known.has(key)).map(key => cssField(key));
+  const custom = inspectorSection("任意の CSS プロパティ",false,customStyleForm(),...extras);
+  const accessibility = inspectorSection("アクセシビリティの目安",false,metricsList(accessibilityInfo(element,computed)));
   const help = document.createElement("p");
   help.className = "help";
-  help.textContent = "入力した値はタグの style に反映されます。空欄にすると指定を解除します。";
+  help.textContent = typeof project.source === "string" ? "入力した値をタグの style に適用します。空欄で指定を解除できます。" :
+    "CSS を適用すると HTML タグ編集に切り替わります。元に戻すとレイヤー編集に戻せます。";
   const focused = properties.contains(document.activeElement) && document.activeElement.getAttribute("aria-label");
-  properties.replaceChildren(tagName(sourceLabel(element)),boxModel(cssField("幅","width"),cssField("高さ","height"),
-    (key,side) => cssField(sides[side],key + "-" + side,key + " " + sides[side])),help);
+  properties.replaceChildren(tagName(sourceLabel(element)),metricsList([["表示サイズ",boxSize(element.getBoundingClientRect())]]),
+    help,position,size,layout,appearance,custom,accessibility);
   if (focused) {
     Array.from(properties.querySelectorAll("input")).find(input => input.getAttribute("aria-label") === focused)?.focus({preventScroll:true});
   }
@@ -1034,14 +1269,24 @@ sourceSheet.addEventListener("load",() => {
   const page = sourceSheet.contentDocument;
   if (previewSource === undefined || page?.head?.firstElementChild?.dataset.preview !== String(previewRevision)) return;
   sourceDocument = page;
+  if (typeof project.source !== "string" && selected) {
+    const previous = page.getElementById(selected);
+    inspectedPath = page.body.contains(previous) ? pathFor(previous) : null;
+  }
   const frameWindow = page.defaultView;
   if (sourceScroll) frameWindow.scrollTo(...sourceScroll);
   page.addEventListener("click",event => {
     event.preventDefault();
     if (codeDirty()) return;
     const element = event.target;
-    if (page.body.contains(element) && inspectable(element)) select(pathFor(element));
+    if (page.body.contains(element) && inspectable(element)) pickSource(pathFor(element));
   },true);
+  page.addEventListener("pointerover",event => {
+    if (page.body.contains(event.target) && inspectable(event.target)) hoverSource(event.target);
+  });
+  page.addEventListener("pointerout",event => {
+    if (!event.relatedTarget?.nodeType || !page.body.contains(event.relatedTarget)) hoverSource(null);
+  });
   page.addEventListener("auxclick",event => event.preventDefault(),true);
   page.addEventListener("scroll",highlightSource,true);
   frameWindow.addEventListener("resize",() => {
@@ -1059,6 +1304,7 @@ function codeDirty() {
 function updateCodeControls() {
   const dirty = codeDirty();
   codeToggle.disabled = dirty;
+  inspectToggle.disabled = dirty;
   byId("code-apply").disabled = !dirty || !sourceCode.value.trim();
   byId("code-reset").disabled = !dirty;
   for (const control of ["new","open","preview","export"]) byId(control).disabled = dirty;
@@ -1202,7 +1448,11 @@ byId("file-open").addEventListener("change",async event => {
     status(error instanceof SyntaxError ? "このHTMLの編集データを読み込めません。" : error.message || "HTMLを読み込めませんでした。");
   }
 });
-byId("new").addEventListener("click",() => change(() => { project = blank(); selected = null; }));
+byId("new").addEventListener("click",() => change(() => {
+  project = blank();
+  selected = inspectedPath = hoveredElement = null;
+  inspectMode = false;
+}));
 byId("open").addEventListener("click",() => byId("file-open").click());
 byId("export").addEventListener("click",download);
 byId("preview").addEventListener("click",showPreview);
@@ -1236,7 +1486,11 @@ document.addEventListener("keydown",event => {
     else restore(past,future);
     return;
   }
-  if (event.key === "Escape") { select(null); return; }
+  if (event.key === "Escape") {
+    if (tagCanvas()) pickSource(null);
+    else select(null);
+    return;
+  }
   const item = itemSelected();
   if (!item || event.target !== sheet) return;
   if (event.key === "Delete" || event.key === "Backspace") {

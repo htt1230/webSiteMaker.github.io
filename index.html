@@ -50,6 +50,7 @@
       </div>
       <span class="stage-size" id="stage-size"></span>
       <div class="tools">
+        <button class="action" id="inspect-toggle" aria-pressed="false" aria-controls="source-sheet properties">要素検査</button>
         <button class="action" id="code-toggle" aria-pressed="false" aria-controls="code-panel">コード</button>
         <button class="action icon-button" id="undo" title="元に戻す" aria-label="元に戻す">
           <svg width="20" height="20" viewBox="0 0 24 24" aria-hidden="true">
@@ -83,6 +84,11 @@
         <div class="sheet" id="sheet" tabindex="0" aria-label="デザインキャンバス"></div>
         <iframe class="sheet source-sheet" id="source-sheet" title="HTML 編集キャンバス" sandbox="allow-same-origin" hidden></iframe>
         <div id="source-outline" aria-hidden="true" hidden></div>
+        <div id="inspect-box" class="inspect-box" aria-hidden="true" hidden>
+          <span class="inspect-margin"></span><span class="inspect-border"></span>
+          <span class="inspect-padding"></span><span class="inspect-content"></span>
+        </div>
+        <div id="inspect-tooltip" class="inspect-tooltip" aria-hidden="true" hidden></div>
       </div>
       <p class="dimensions" id="canvas-help">ドラッグで移動 · 角のつまみでサイズ変更</p>
     </div>

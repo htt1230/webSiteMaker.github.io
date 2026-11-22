@@ -42,8 +42,16 @@
       </div>
       <span class="stage-size" id="stage-size"></span>
       <div class="tools">
-        <button class="action icon-button" id="undo" title="元に戻す" aria-label="元に戻す">↶</button>
-        <button class="action icon-button" id="redo" title="やり直す" aria-label="やり直す">↷</button>
+        <button class="action icon-button" id="undo" title="元に戻す" aria-label="元に戻す">
+          <svg width="20" height="20" viewBox="0 0 24 24" aria-hidden="true">
+            <path id="undo-arrow" d="M9 4 4 9l5 5M4 9h11a5 5 0 0 1 0 10h-3" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+        </button>
+        <button class="action icon-button" id="redo" title="やり直す" aria-label="やり直す">
+          <svg width="20" height="20" viewBox="0 0 24 24" aria-hidden="true">
+            <use href="#undo-arrow" transform="translate(24 0) scale(-1 1)"/>
+          </svg>
+        </button>
       </div>
     </div>
     <div class="viewport" id="viewport">

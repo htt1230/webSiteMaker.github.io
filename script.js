@@ -5,6 +5,11 @@ const sheet = byId("sheet");
 const viewport = byId("viewport");
 const shell = byId("shell");
 const properties = byId("properties");
+const sourceSheet = byId("source-sheet");
+const sourceOutline = byId("source-outline");
+const sourceCode = byId("source-code");
+const codePanel = byId("code-panel");
+const codeToggle = byId("code-toggle");
 const types = {text:"テキスト", image:"画像", button:"ボタン", shape:"四角形"};
 const symbols = {text:"T", image:"▧", button:"▣", shape:"■"};
 const widths = {desktop:960, mobile:390};
@@ -18,15 +23,25 @@ const fonts = {
 const colorPattern = /^#[0-9a-f]{6}$/i;
 const imagePattern = /^data:image\/(?:png|jpeg|webp|gif|avif);base64,[A-Za-z0-9+/=]+$/;
 const past = [], future = [];
+const sides = {top:"上",right:"右",bottom:"下",left:"左"};
 let view = "desktop";
 let selected = null;
 let scale = 1, gesture, imageRequest, statusTimer;
+let codeBase = "";
+let previewSource, sourceDocument, previewRevision = 0;
+let sourceScroll;
 
 function id() {
   return "item-" + (globalThis.crypto?.randomUUID?.() || Math.random().toString(36).slice(2));
 }
 function rect(x,y,w,h,size = 24) {
-  return {x,y,w,h,size};
+  return {x,y,w,h,size,padding:readSpacing(),margin:readSpacing()};
+}
+function readSpacing(value,minimum = 0) {
+  return Object.fromEntries(Object.keys(sides).map(side => [side,number(value?.[side],0,minimum,8000)]));
+}
+function spacingCSS(spacing,unit = value => value + "px") {
+  return Object.keys(sides).map(side => unit(spacing[side])).join(" ");
 }
 function blank() {
   return {version:1,title:"無題のサイト",background:"#ffffff",heights:{desktop:640,mobile:760},items:[]};
@@ -76,7 +91,10 @@ function safeLink(value) {
 function boundedRect(raw,width,height) {
   const x = number(raw?.x,16,0,width-16);
   const y = number(raw?.y,16,0,height-16);
-  return rect(x,y,number(raw?.w,16,16,width-x),number(raw?.h,16,16,height-y),number(raw?.size,24,8,160));
+  return {
+    x,y,w:number(raw?.w,16,16,width-x),h:number(raw?.h,16,16,height-y),size:number(raw?.size,24,8,160),
+    padding:readSpacing(raw?.padding),margin:readSpacing(raw?.margin,-8000)
+  };
 }
 function readProject(raw, getImage) {
   if (raw?.version !== 1 || !Array.isArray(raw.items) || raw.items.length > 500) {
@@ -84,6 +102,7 @@ function readProject(raw, getImage) {
   }
   const result = blank();
   result.title = typeof raw.title === "string" ? raw.title.slice(0,160) : result.title;
+  if (typeof raw.source === "string") return {...result,source:raw.source};
   result.background = safeColor(raw.background,result.background);
   for (const name of Object.keys(widths)) {
     result.heights[name] = number(raw.heights?.[name],result.heights[name],300,8000);
@@ -153,6 +172,9 @@ function itemSelected() {
 function titleFor(item) {
   return item.text.trim().split("\n")[0] || item.alt || types[item.type];
 }
+function itemTag(item) {
+  return item.type === "button" && item.href ? "a" : "div";
+}
 function select(which) {
   if (selected === which) return;
   selected = which;
@@ -167,6 +189,19 @@ function textStyle(item) {
   };
 }
 function renderArt() {
+  const usesSource = typeof project.source === "string";
+  sheet.hidden = usesSource;
+  sourceSheet.hidden = !usesSource;
+  if (usesSource) {
+    renderSourceSheet();
+    fit();
+    return;
+  }
+  if (previewSource !== undefined) {
+    previewSource = sourceDocument = sourceScroll = undefined;
+    sourceSheet.removeAttribute("srcdoc");
+    sourceOutline.hidden = true;
+  }
   sheet.style.width = widths[view] + "px";
   sheet.style.height = project.heights[view] + "px";
   sheet.style.backgroundColor = project.background;
@@ -178,6 +213,7 @@ function renderArt() {
     Object.assign(element.style,textStyle(item),{
       left:position.x + "px",top:position.y + "px",width:position.w + "px",
       height:position.h + "px",fontSize:position.size + "px",borderRadius:item.radius + "px",
+      padding:spacingCSS(position.padding),margin:spacingCSS(position.margin),
       backgroundColor:["shape","button"].includes(item.type) ? item.fill : "transparent"
     });
     const content = document.createElement("div");
@@ -208,12 +244,28 @@ function fit() {
   const available = viewport.clientWidth - parseFloat(padding.paddingLeft) - parseFloat(padding.paddingRight);
   if (available <= 0) return;
   scale = Math.min(1,available / widths[view]);
-  sheet.style.transform = "scale(" + scale + ")";
+  const art = sourceSheet.hidden ? sheet : sourceSheet;
+  art.style.transform = "scale(" + scale + ")";
+  if (art === sourceSheet) {
+    art.style.width = widths[view] + "px";
+    art.style.height = project.heights[view] + "px";
+    highlightSource();
+  }
   shell.style.width = widths[view] * scale + "px";
   shell.style.height = project.heights[view] * scale + "px";
   byId("stage-size").textContent = widths[view] + " × " + project.heights[view] + " px · " + Math.round(scale * 100) + "%";
 }
 function renderLayers() {
+  const usesSource = typeof project.source === "string";
+  byId("add-heading").hidden = usesSource;
+  byId("add-tools").hidden = usesSource;
+  byId("layer-tools").hidden = usesSource;
+  byId("layers-heading").textContent = usesSource ? "HTML 要素" : "レイヤー";
+  byId("canvas-help").textContent = usesSource ? "キャンバスまたは HTML 要素の一覧から選択" : "ドラッグで移動 · 右下のつまみでサイズ変更";
+  if (usesSource) {
+    renderSourceLayers();
+    return;
+  }
   const index = project.items.findIndex(item => item.id === selected);
   byId("front").disabled = index < 0 || index === project.items.length-1;
   byId("back").disabled = index <= 0;
@@ -240,13 +292,15 @@ function renderLayers() {
   byId("layers").replaceChildren(...rows);
 }
 function renderHistory() {
-  byId("undo").disabled = past.length === 0;
-  byId("redo").disabled = future.length === 0;
+  const dirty = codeDirty();
+  byId("undo").disabled = dirty || past.length === 0;
+  byId("redo").disabled = dirty || future.length === 0;
 }
 function render() {
   renderArt();
   renderLayers();
   renderProperties();
+  refreshCode();
   renderHistory();
   for (const control of document.querySelectorAll("[data-view]")) {
     control.setAttribute("aria-pressed",String(control.dataset.view === view));
@@ -274,6 +328,7 @@ function field(name, kind, value, update, options = {}) {
       record(before);
       renderArt();
       renderLayers();
+      refreshCode();
       renderHistory();
     }
   });
@@ -299,7 +354,39 @@ function action(text,run) {
   button.addEventListener("click",run);
   return button;
 }
+function boxModel(width,height,spacingField) {
+  const label = text => {
+    const title = document.createElement("p");
+    title.className = "box-label";
+    title.textContent = text;
+    return title;
+  };
+  const spacing = key => [
+    group(spacingField(key,"top"),spacingField(key,"right")),
+    group(spacingField(key,"bottom"),spacingField(key,"left"))
+  ];
+  const size = document.createElement("div");
+  size.className = "box-size";
+  size.append(label("サイズ"),group(width,height));
+  const padding = document.createElement("div");
+  padding.className = "box-padding";
+  padding.append(label("padding"),...spacing("padding"),size);
+  const margin = document.createElement("div");
+  margin.className = "box-model";
+  margin.append(label("margin"),...spacing("margin"),padding);
+  return margin;
+}
+function tagName(label) {
+  const tag = document.createElement("p");
+  tag.className = "tag-name";
+  tag.textContent = label;
+  return tag;
+}
 function renderProperties() {
+  if (typeof project.source === "string") {
+    renderSourceProperties();
+    return;
+  }
   const item = itemSelected();
   byId("properties-title").textContent = item ? types[item.type] + "の設定" : "ページ設定";
   if (!item) {
@@ -319,16 +406,29 @@ function renderProperties() {
     position[key] = number(value,position[key],min,max());
     return position[key];
   },{min,max:max()});
+  const spacingField = (key,side) => {
+    const spacing = position[key];
+    const min = key === "margin" ? -8000 : 0;
+    const control = field(sides[side],"number",spacing[side],value => {
+      spacing[side] = number(value,spacing[side],min,8000);
+      return spacing[side];
+    },{min,max:8000});
+    control.querySelector("input").setAttribute("aria-label",key + " " + sides[side] + " (px)");
+    return control;
+  };
+  const x = geometry("横位置","x",0,() => widths[view]-position.w);
+  const y = geometry("縦位置","y",0,() => project.heights[view]-position.h);
+  const w = geometry("幅","w",16,() => widths[view]-position.x);
+  const h = geometry("高さ","h",16,() => project.heights[view]-position.y);
   const layout = section(
-    group(geometry("横位置","x",0,() => widths[view]-position.w),geometry("縦位置","y",0,() => project.heights[view]-position.h)),
-    group(geometry("幅","w",16,() => widths[view]-position.x),geometry("高さ","h",16,() => project.heights[view]-position.y))
+    tagName("<" + itemTag(item) + "> · " + (view === "desktop" ? "PC" : "スマホ") + " · px"),
+    group(x,y),boxModel(w,h,spacingField)
   );
   layout.addEventListener("change",() => {
-    const [x,y,w,h] = layout.querySelectorAll("input");
-    x.max = widths[view] - position.w;
-    y.max = project.heights[view] - position.h;
-    w.max = widths[view] - position.x;
-    h.max = project.heights[view] - position.y;
+    x.querySelector("input").max = widths[view] - position.w;
+    y.querySelector("input").max = project.heights[view] - position.h;
+    w.querySelector("input").max = widths[view] - position.x;
+    h.querySelector("input").max = project.heights[view] - position.y;
   });
   const appearance = section();
   if (item.type === "text" || item.type === "button") {
@@ -467,9 +567,17 @@ const htmlEscape = value => String(value).replace(/[&<>"']/g,character =>
 const asUnit = (value,width) => +(value*100/width).toFixed(5) + "cqw";
 function inlineGeometry(item) {
   const keys = ["x","y","w","h","size"];
-  return Object.entries(widths).flatMap(([name,width]) =>
-    keys.map(key => "--" + name[0] + "-" + key + ":" + asUnit(item[name][key],width))
-    .concat("--" + name[0] + "-radius:" + asUnit(item.radius,width))).join(";");
+  return Object.entries(widths).flatMap(([name,width]) => {
+    const prefix = "--" + name[0] + "-";
+    const position = item[name];
+    const unit = value => asUnit(value,width);
+    return [
+      ...keys.map(key => prefix + key + ":" + unit(position[key])),
+      prefix + "radius:" + unit(item.radius),
+      prefix + "padding:" + spacingCSS(position.padding,unit),
+      prefix + "margin:" + spacingCSS(position.margin,unit)
+    ];
+  }).join(";");
 }
 function exportItem(item) {
   const style = textStyle(item);
@@ -479,16 +587,17 @@ function exportItem(item) {
     "justify-content:"+style.justifyContent,"align-items:"+style.alignItems
   ];
   if (["button","shape"].includes(item.type)) css.push("background:"+item.fill);
-  const tag = item.type === "button" && item.href ? "a" : "div";
+  const tag = itemTag(item);
   const extra = tag === "a" ? ' href="' + htmlEscape(item.href) + '"' : item.type === "shape" ? ' aria-hidden="true"' : "";
   const content = item.type === "image" ?
     '<img src="' + htmlEscape(item.src) + '" alt="' + htmlEscape(item.alt) + '">' : htmlEscape(item.text);
   return '<' + tag + ' class="site-object" id="' + htmlEscape(item.id) + '" style="' +
     htmlEscape(css.join(";")) + '"' + extra + '>' + content + '</' + tag + '>';
 }
-function exportHTML() {
-  const metadata = {...project,items:project.items.map(({src,...item}) => item)};
-  const embedded = JSON.stringify(metadata).replace(/</g,"\\u003c");
+function exportHTML(includeMetadata = true) {
+  if (typeof project.source === "string") return project.source;
+  const metadata = includeMetadata ? {...project,items:project.items.map(({src,...item}) => item)} : null;
+  const embedded = metadata ? JSON.stringify(metadata).replace(/</g,"\\u003c") : "";
   const pageBreak = 600;
   return [
     '<!doctype html>',
@@ -501,19 +610,236 @@ function exportHTML() {
     '*{box-sizing:border-box}body{margin:0;background:'+project.background+'}',
     '.site{container-type:inline-size;width:min(100%,960px);margin:0 auto}',
     '.page{position:relative;overflow:hidden;height:'+asUnit(project.heights.desktop,widths.desktop)+'}',
-    '.site-object{position:absolute;display:flex;overflow:hidden;min-width:0;overflow-wrap:anywhere;white-space:pre-wrap;line-height:1.12;text-decoration:none;left:var(--d-x);top:var(--d-y);width:var(--d-w);height:var(--d-h);font-size:var(--d-size);border-radius:var(--d-radius)}',
+    '.site-object{position:absolute;display:flex;overflow:hidden;min-width:0;overflow-wrap:anywhere;white-space:pre-wrap;line-height:1.12;text-decoration:none;left:var(--d-x);top:var(--d-y);width:var(--d-w);height:var(--d-h);font-size:var(--d-size);border-radius:var(--d-radius);padding:var(--d-padding);margin:var(--d-margin)}',
     '.site-object img{width:100%;height:100%;object-fit:cover;display:block}',
     '.site-object:focus-visible{outline:2px solid currentColor;outline-offset:-3px}',
-    '@media(max-width:'+pageBreak+'px){.site{width:min(100%,390px)}.page{height:'+asUnit(project.heights.mobile,widths.mobile)+'}.site-object{left:var(--m-x);top:var(--m-y);width:var(--m-w);height:var(--m-h);font-size:var(--m-size);border-radius:var(--m-radius)}}',
+    '@media(max-width:'+pageBreak+'px){.site{width:min(100%,390px)}.page{height:'+asUnit(project.heights.mobile,widths.mobile)+'}.site-object{left:var(--m-x);top:var(--m-y);width:var(--m-w);height:var(--m-h);font-size:var(--m-size);border-radius:var(--m-radius);padding:var(--m-padding);margin:var(--m-margin)}}',
     '</style>',
     '</' + 'head>',
     '<body><main class="site"><div class="page">',
     ...project.items.map(exportItem),
     '</div></main>',
-    '<script type="application/json" id="sitecanvas-project">' + embedded + '</' + 'script>',
+    ...(metadata ? ['<script type="application/json" id="sitecanvas-project">' + embedded + '</' + 'script>'] : []),
     '</' + 'body></' + 'html>'
   ].join("\n");
 }
+function parseHTML(source) {
+  return new DOMParser().parseFromString(source,"text/html");
+}
+function serializeHTML(page) {
+  const serializer = new XMLSerializer();
+  return Array.from(page.childNodes,node => node.outerHTML ?? serializer.serializeToString(node)).join("\n");
+}
+function projectFromSource(source) {
+  const title = parseHTML(source).title.trim().slice(0,160) || "無題のサイト";
+  return {...blank(),title,source};
+}
+function previewHTML(source,revision) {
+  const page = parseHTML(source);
+  for (const refresh of page.querySelectorAll('meta[http-equiv="refresh" i]')) refresh.removeAttribute("http-equiv");
+  const policy = page.createElement("meta");
+  policy.httpEquiv = "Content-Security-Policy";
+  policy.content = "script-src 'none'; object-src 'none'; frame-src 'none'; form-action 'none'";
+  if (revision !== undefined) policy.dataset.preview = revision;
+  page.head.prepend(policy);
+  return serializeHTML(page);
+}
+function renderSourceSheet() {
+  if (previewSource === project.source) return;
+  if (selected === null) sourceScroll = undefined;
+  else if (sourceDocument) {
+    const {scrollLeft,scrollTop} = sourceDocument.scrollingElement;
+    sourceScroll = [scrollLeft,scrollTop];
+  }
+  previewSource = project.source;
+  sourceDocument = undefined;
+  sourceOutline.hidden = true;
+  sourceSheet.srcdoc = previewHTML(previewSource,++previewRevision);
+}
+function sourceElement(page,path) {
+  if (!page?.body || path === null) return;
+  if (path === "") return page.body;
+  return path.split(".").reduce((parent,index) => parent?.children[index],page.body);
+}
+function pathFor(element) {
+  const indexes = [];
+  while (element !== element.ownerDocument.body) {
+    indexes.push(Array.prototype.indexOf.call(element.parentElement.children,element));
+    element = element.parentElement;
+  }
+  return indexes.reverse().join(".");
+}
+function inspectable(element) {
+  return element.style && !["link","meta","script","style","template"].includes(element.localName);
+}
+function sourceLabel(element) {
+  return "<" + element.localName + ">" + (element.id ? " #" + element.id : "");
+}
+function renderSourceLayers() {
+  const layers = byId("layers");
+  const body = sourceDocument?.body;
+  if (!body) {
+    layers.replaceChildren();
+    return;
+  }
+  const scrollTop = layers.scrollTop;
+  const focusedPath = layers.contains(document.activeElement) ? document.activeElement.dataset.path : undefined;
+  const rows = [body,...body.querySelectorAll("*")].filter(inspectable).map(element => {
+    const path = pathFor(element);
+    const row = document.createElement("button");
+    row.className = "layer tag-row";
+    const depth = path ? path.split(".").length : 0;
+    row.style.setProperty("--depth",Math.min(depth,8));
+    row.setAttribute("aria-pressed",String(path === selected));
+    row.dataset.path = path;
+    row.title = sourceLabel(element);
+    const name = document.createElement("span");
+    name.textContent = row.title;
+    row.append(name);
+    row.addEventListener("click",() => {
+      element.scrollIntoView({block:"nearest",inline:"nearest",container:"nearest"});
+      select(path);
+      highlightSource();
+    });
+    return row;
+  });
+  layers.replaceChildren(...rows);
+  layers.scrollTop = scrollTop;
+  rows.find(row => row.dataset.path === focusedPath)?.focus({preventScroll:true});
+}
+function highlightSource() {
+  const element = sourceElement(sourceDocument,selected);
+  if (!element) {
+    sourceOutline.hidden = true;
+    return;
+  }
+  const box = element.getBoundingClientRect();
+  const left = Math.max(0,box.left), top = Math.max(0,box.top);
+  const right = Math.min(sourceSheet.clientWidth,box.right);
+  const bottom = Math.min(sourceSheet.clientHeight,box.bottom);
+  sourceOutline.hidden = right <= left || bottom <= top;
+  Object.assign(sourceOutline.style,{
+    left:left*scale+"px",top:top*scale+"px",width:(right-left)*scale+"px",height:(bottom-top)*scale+"px"
+  });
+}
+function editSourceStyle(path,key,value) {
+  const page = parseHTML(project.source);
+  const element = sourceElement(page,path);
+  if (!element) return "";
+  const previous = element.style.getPropertyValue(key);
+  const previousPriority = element.style.getPropertyPriority(key);
+  const priority = /\s*!important\s*$/i.test(value) ? "important" : "";
+  const input = value.replace(/\s*!important\s*$/i,"").trim();
+  const next = /^-?(?:\d+\.?\d*|\.\d+)$/.test(input) ? input + "px" : input;
+  if (next && !CSS.supports(key,next)) {
+    status("CSS の値を確認してください。例 24px、2rem、10%");
+    return inlineStyleValue(element,key);
+  }
+  if (next !== previous || priority !== previousPriority) {
+    element.style.setProperty(key,next,priority);
+    if (!element.style.length) element.removeAttribute("style");
+    project.source = serializeHTML(page);
+  }
+  return inlineStyleValue(element,key);
+}
+function inlineStyleValue(element,key) {
+  const value = element.style.getPropertyValue(key);
+  return element.style.getPropertyPriority(key) ? value + " !important" : value;
+}
+function renderSourceProperties() {
+  const heading = byId("properties-title");
+  const element = sourceElement(sourceDocument,selected);
+  heading.textContent = "要素のスタイル";
+  if (!element) {
+    const help = document.createElement("p");
+    help.className = "help";
+    help.textContent = "編集する HTML 要素を選んでください。";
+    properties.replaceChildren(help);
+    return;
+  }
+  const computed = sourceSheet.contentWindow.getComputedStyle(element);
+  const cssField = (name,key,accessibleName = name) => {
+    const control = field(name,"text",inlineStyleValue(element,key),
+      value => editSourceStyle(selected,key,value),{placeholder:computed.getPropertyValue(key)});
+    control.querySelector("input").setAttribute("aria-label",accessibleName);
+    return control;
+  };
+  const help = document.createElement("p");
+  help.className = "help";
+  help.textContent = "入力した値はタグの style に反映されます。空欄にすると指定を解除します。";
+  const focused = properties.contains(document.activeElement) && document.activeElement.getAttribute("aria-label");
+  properties.replaceChildren(tagName(sourceLabel(element)),boxModel(cssField("幅","width"),cssField("高さ","height"),
+    (key,side) => cssField(sides[side],key + "-" + side,key + " " + sides[side])),help);
+  if (focused) {
+    Array.from(properties.querySelectorAll("input")).find(input => input.getAttribute("aria-label") === focused)?.focus({preventScroll:true});
+  }
+}
+sourceSheet.addEventListener("load",() => {
+  const page = sourceSheet.contentDocument;
+  if (previewSource === undefined || page?.head?.firstElementChild?.dataset.preview !== String(previewRevision)) return;
+  sourceDocument = page;
+  const frameWindow = page.defaultView;
+  if (sourceScroll) frameWindow.scrollTo(...sourceScroll);
+  page.addEventListener("click",event => {
+    event.preventDefault();
+    if (codeDirty()) return;
+    const element = event.target;
+    if (page.body.contains(element) && inspectable(element)) select(pathFor(element));
+  },true);
+  page.addEventListener("auxclick",event => event.preventDefault(),true);
+  page.addEventListener("scroll",highlightSource,true);
+  frameWindow.addEventListener("resize",() => {
+    highlightSource();
+    if (sourceDocument === page && !properties.contains(document.activeElement)) renderSourceProperties();
+  });
+  renderSourceLayers();
+  renderSourceProperties();
+  highlightSource();
+});
+
+function codeDirty() {
+  return sourceCode.value !== codeBase;
+}
+function updateCodeControls() {
+  const dirty = codeDirty();
+  codeToggle.disabled = dirty;
+  byId("code-apply").disabled = !dirty || !sourceCode.value.trim();
+  byId("code-reset").disabled = !dirty;
+  for (const control of ["new","open","preview","export"]) byId(control).disabled = dirty;
+  for (const area of [".panel.left",".panel.right",".viewport"]) document.querySelector(area).inert = dirty;
+  byId("code-help").textContent = dirty ? "キャンバスで編集を続けるには、コードを反映するか変更を破棄してください。" :
+    typeof project.source === "string" ? "HTML と CSS の変更は「コードを反映」でキャンバスに表示されます。" :
+    "コードを反映すると、レイヤー編集から HTML タグの編集に切り替わります。";
+}
+function refreshCode() {
+  if (codePanel.hidden) return;
+  if (!codeDirty()) {
+    const next = exportHTML(false);
+    if (sourceCode.value !== next) sourceCode.value = next;
+    codeBase = sourceCode.value;
+  }
+  updateCodeControls();
+}
+codeToggle.addEventListener("click",() => {
+  codePanel.hidden = !codePanel.hidden;
+  codeToggle.setAttribute("aria-pressed",String(!codePanel.hidden));
+  if (!codePanel.hidden) {
+    refreshCode();
+    sourceCode.focus();
+  }
+});
+sourceCode.addEventListener("input",() => { updateCodeControls(); renderHistory(); });
+byId("code-reset").addEventListener("click",() => {
+  sourceCode.value = codeBase;
+  refreshCode();
+  renderHistory();
+});
+byId("code-apply").addEventListener("click",() => {
+  const next = projectFromSource(sourceCode.value);
+  codeBase = sourceCode.value;
+  change(() => { project = next; selected = null; });
+  status("コードをキャンバスに反映しました。");
+});
 function download() {
   const filename = (project.title.trim().replace(/[\\/:*?"<>|\u0000-\u001f]/g,"-").replace(/[. ]+$/,"") || "index") + ".html";
   const url = URL.createObjectURL(new Blob([exportHTML()],{type:"text/html;charset=utf-8"}));
@@ -548,7 +874,7 @@ function setPreview(device) {
   fitPreview();
 }
 function showPreview() {
-  iframe.srcdoc = exportHTML();
+  iframe.srcdoc = typeof project.source === "string" ? previewHTML(project.source) : exportHTML(false);
   dialog.showModal();
   setPreview(view);
 }
@@ -587,14 +913,20 @@ byId("file-open").addEventListener("change",async event => {
   if (!file) return;
   try {
     const template = document.createElement("template");
-    template.innerHTML = await file.text();
+    const source = await file.text();
+    if (codeDirty()) return;
+    template.innerHTML = source;
     const metadata = template.content.querySelector('script[id="sitecanvas-project"][type="application/json"]');
-    if (!metadata) throw new Error("SiteCanvasから書き出したHTMLを選んでください。");
-    const images = new Map();
-    for (const image of template.content.querySelectorAll(".site-object[id] > img")) {
-      images.set(image.parentElement.id,image.getAttribute("src"));
+    let next;
+    if (metadata) {
+      const images = new Map();
+      for (const image of template.content.querySelectorAll(".site-object[id] > img")) {
+        images.set(image.parentElement.id,image.getAttribute("src"));
+      }
+      next = readProject(JSON.parse(metadata.textContent),key => images.get(key));
+    } else {
+      next = projectFromSource(source);
     }
-    const next = readProject(JSON.parse(metadata.textContent),key => images.get(key));
     change(() => { project = next; selected = null; });
     status("HTMLを開きました。");
   } catch (error) {
@@ -622,7 +954,7 @@ for (const control of dialog.querySelectorAll("[data-preview]")) {
   control.addEventListener("click",() => setPreview(control.dataset.preview));
 }
 document.addEventListener("keydown",event => {
-  if (dialog.open || event.target.closest?.("input,textarea,select,[contenteditable]")) return;
+  if (dialog.open || codeDirty() || event.target.closest?.("input,textarea,select,[contenteditable]")) return;
   const key = event.key.toLowerCase();
   if ((event.ctrlKey || event.metaKey) && key === "z") {
     event.preventDefault();

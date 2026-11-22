@@ -18,7 +18,7 @@
 </header>
 <main class="editor">
   <aside class="panel left" aria-label="追加とレイヤー">
-    <h2>要素を追加</h2>
+    <h2 id="add-heading">要素を追加</h2>
     <div class="add-grid" id="add-tools">
       <button class="action" data-add="text"><span class="add-icon" aria-hidden="true">T</span>テキスト</button>
       <button class="action" data-add="image"><span class="add-icon" aria-hidden="true">▧</span>画像</button>
@@ -26,8 +26,8 @@
       <button class="action" data-add="shape"><span class="add-icon" aria-hidden="true">■</span>四角形</button>
     </div>
     <div class="panel-heading layers-title">
-      <h2>レイヤー</h2>
-      <div class="tools">
+      <h2 id="layers-heading">レイヤー</h2>
+      <div class="tools" id="layer-tools">
         <button class="action icon-button" id="front" title="前面へ一段移動" aria-label="前面へ一段移動">↑</button>
         <button class="action icon-button" id="back" title="背面へ一段移動" aria-label="背面へ一段移動">↓</button>
       </div>
@@ -42,6 +42,7 @@
       </div>
       <span class="stage-size" id="stage-size"></span>
       <div class="tools">
+        <button class="action" id="code-toggle" aria-pressed="false" aria-controls="code-panel">コード</button>
         <button class="action icon-button" id="undo" title="元に戻す" aria-label="元に戻す">
           <svg width="20" height="20" viewBox="0 0 24 24" aria-hidden="true">
             <path id="undo-arrow" d="M9 4 4 9l5 5M4 9h11a5 5 0 0 1 0 10h-3" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
@@ -54,9 +55,24 @@
         </button>
       </div>
     </div>
+    <section id="code-panel" class="code-panel" aria-labelledby="code-heading" hidden>
+      <div class="code-bar">
+        <h2 id="code-heading"><label for="source-code">HTML / CSS</label></h2>
+        <div class="tools">
+          <button class="action" id="code-reset">変更を破棄</button>
+          <button class="action primary" id="code-apply">コードを反映</button>
+        </div>
+      </div>
+      <textarea id="source-code" wrap="off" spellcheck="false" autocapitalize="off" aria-describedby="code-help"></textarea>
+      <p id="code-help" class="help"></p>
+    </section>
     <div class="viewport" id="viewport">
-      <div class="sheet-shell" id="shell"><div class="sheet" id="sheet" tabindex="0" aria-label="デザインキャンバス"></div></div>
-      <p class="dimensions">ドラッグで移動 · 右下のつまみでサイズ変更</p>
+      <div class="sheet-shell" id="shell">
+        <div class="sheet" id="sheet" tabindex="0" aria-label="デザインキャンバス"></div>
+        <iframe class="sheet source-sheet" id="source-sheet" title="HTML 編集キャンバス" sandbox="allow-same-origin" hidden></iframe>
+        <div id="source-outline" aria-hidden="true" hidden></div>
+      </div>
+      <p class="dimensions" id="canvas-help">ドラッグで移動 · 右下のつまみでサイズ変更</p>
     </div>
   </section>
   <aside class="panel right" aria-label="プロパティ">

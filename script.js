@@ -10,8 +10,12 @@ const sourceOutline = byId("source-outline");
 const sourceCode = byId("source-code");
 const codePanel = byId("code-panel");
 const codeToggle = byId("code-toggle");
-const types = {text:"テキスト", image:"画像", button:"ボタン", shape:"四角形"};
-const symbols = {text:"T", image:"▧", button:"▣", shape:"■"};
+const types = {text:"テキスト", image:"画像", button:"ボタン", shape:"四角形", header:"ヘッダー", footer:"フッター"};
+const symbols = {text:"T", image:"▧", button:"▣", shape:"■", header:"▔", footer:"▁"};
+const regionPresets = {
+  header:{text:"サイト名",desktop:[72,24,28],mobile:[60,20,16]},
+  footer:{text:"© サイト名",desktop:[64,16,28],mobile:[56,14,16]}
+};
 const widths = {desktop:960, mobile:390};
 const storageKey = "sitecanvas-v1";
 const fontOptions = {sans:"ゴシック", serif:"明朝", mono:"等幅"};
@@ -52,6 +56,12 @@ function make(type, desktop, mobile, overrides = {}) {
     color:"#202821",fill:"#225840",font:"sans",bold:false,align:"left",radius:0,
     href:"",src:"",alt:"",desktop,mobile,...overrides
   };
+}
+function isPageRegion(type) {
+  return Object.hasOwn(regionPresets,type);
+}
+function hasFill(type) {
+  return type === "shape" || type === "button" || isPageRegion(type);
 }
 function example() {
   const site = blank();
@@ -173,7 +183,11 @@ function titleFor(item) {
   return item.text.trim().split("\n")[0] || item.alt || types[item.type];
 }
 function itemTag(item) {
+  if (isPageRegion(item.type)) return item.type;
   return item.type === "button" && item.href ? "a" : "div";
+}
+function footerAtBottom(item,position) {
+  return item.type === "footer" && position.y + position.h === project.heights[view];
 }
 function select(which) {
   if (selected === which) return;
@@ -185,7 +199,7 @@ function textStyle(item) {
   return {
     color:item.color,fontFamily:fonts[item.font],fontWeight:item.bold ? "700" : "400",
     textAlign:item.align,justifyContent:align[item.align],
-    alignItems:item.type === "button" ? "center" : "flex-start"
+    alignItems:item.type === "button" || isPageRegion(item.type) ? "center" : "flex-start"
   };
 }
 function renderArt() {
@@ -214,7 +228,7 @@ function renderArt() {
       left:position.x + "px",top:position.y + "px",width:position.w + "px",
       height:position.h + "px",fontSize:position.size + "px",borderRadius:item.radius + "px",
       padding:spacingCSS(position.padding),margin:spacingCSS(position.margin),
-      backgroundColor:["shape","button"].includes(item.type) ? item.fill : "transparent"
+      backgroundColor:hasFill(item.type) ? item.fill : "transparent"
     });
     const content = document.createElement("div");
     content.className = "object-content";
@@ -231,6 +245,7 @@ function renderArt() {
     if (item.id === selected) {
       const handle = document.createElement("span");
       handle.className = "handle";
+      if (footerAtBottom(item,position)) handle.classList.add("from-top");
       handle.setAttribute("aria-hidden","true");
       element.append(handle);
     }
@@ -261,7 +276,7 @@ function renderLayers() {
   byId("add-tools").hidden = usesSource;
   byId("layer-tools").hidden = usesSource;
   byId("layers-heading").textContent = usesSource ? "HTML 要素" : "レイヤー";
-  byId("canvas-help").textContent = usesSource ? "キャンバスまたは HTML 要素の一覧から選択" : "ドラッグで移動 · 右下のつまみでサイズ変更";
+  byId("canvas-help").textContent = usesSource ? "キャンバスまたは HTML 要素の一覧から選択" : "ドラッグで移動 · 角のつまみでサイズ変更";
   if (usesSource) {
     renderSourceLayers();
     return;
@@ -382,6 +397,25 @@ function tagName(label) {
   tag.textContent = label;
   return tag;
 }
+function resizePage(value) {
+  const height = project.heights[view];
+  const atBottom = [];
+  let minimum = 300;
+  for (const item of project.items) {
+    const position = item[view];
+    const bottom = position.y + position.h;
+    if (footerAtBottom(item,position)) {
+      atBottom.push(position);
+      minimum = Math.max(minimum,position.h);
+    } else {
+      minimum = Math.max(minimum,bottom);
+    }
+  }
+  const next = number(value,height,minimum,8000);
+  for (const position of atBottom) position.y = next - position.h;
+  project.heights[view] = next;
+  return next;
+}
 function renderProperties() {
   if (typeof project.source === "string") {
     renderSourceProperties();
@@ -393,11 +427,7 @@ function renderProperties() {
     properties.replaceChildren(section(
       field("ページタイトル","text",project.title,value => { project.title = value; },{maxLength:160}),
       field("背景色","color",project.background,value => { project.background = value; }),
-      field("ページの高さ (px)","number",project.heights[view],value => {
-        const minimum = project.items.reduce((height,layer) => Math.max(height,layer[view].y + layer[view].h),300);
-        project.heights[view] = number(value,project.heights[view],minimum,8000);
-        return project.heights[view];
-      },{min:300,max:8000})
+      field("ページの高さ (px)","number",project.heights[view],resizePage,{min:300,max:8000})
     ));
     return;
   }
@@ -419,7 +449,13 @@ function renderProperties() {
   const x = geometry("横位置","x",0,() => widths[view]-position.w);
   const y = geometry("縦位置","y",0,() => project.heights[view]-position.h);
   const w = geometry("幅","w",16,() => widths[view]-position.x);
-  const h = geometry("高さ","h",16,() => project.heights[view]-position.y);
+  const maxHeight = () => project.heights[view] - (footerAtBottom(item,position) ? 0 : position.y);
+  const h = field("高さ","number",position.h,value => {
+    const next = number(value,position.h,16,maxHeight());
+    if (footerAtBottom(item,position)) position.y = project.heights[view] - next;
+    position.h = next;
+    return next;
+  },{min:16,max:maxHeight()});
   const layout = section(
     tagName("<" + itemTag(item) + "> · " + (view === "desktop" ? "PC" : "スマホ") + " · px"),
     group(x,y),boxModel(w,h,spacingField)
@@ -427,11 +463,12 @@ function renderProperties() {
   layout.addEventListener("change",() => {
     x.querySelector("input").max = widths[view] - position.w;
     y.querySelector("input").max = project.heights[view] - position.h;
+    y.querySelector("input").value = position.y;
     w.querySelector("input").max = widths[view] - position.x;
-    h.querySelector("input").max = project.heights[view] - position.y;
+    h.querySelector("input").max = maxHeight();
   });
   const appearance = section();
-  if (item.type === "text" || item.type === "button") {
+  if (item.type === "text" || item.type === "button" || isPageRegion(item.type)) {
     appearance.append(
       field("表示する文字","textarea",item.text,value => { item.text = value; },{maxLength:4000}),
       group(geometry("文字サイズ","size",8,() => 160),field("文字色","color",item.color,value => { item.color = value; })),
@@ -446,8 +483,8 @@ function renderProperties() {
       action("画像を差し替え",() => chooseImage(item.id))
     );
   }
-  if (item.type === "shape" || item.type === "button") {
-    appearance.append(field("塗り色","color",item.fill,value => { item.fill = value; }));
+  if (hasFill(item.type)) {
+    appearance.append(field(isPageRegion(item.type) ? "背景色" : "塗り色","color",item.fill,value => { item.fill = value; }));
   }
   if (item.type !== "text") {
     appearance.append(field("角の丸み (px)","number",item.radius,value => {
@@ -471,8 +508,20 @@ function centered(name,w,h,size) {
   const width = widths[name], height = project.heights[name];
   return rect(Math.round((width-w)/2),Math.min(120,height-h),w,h,size);
 }
-function add(type,image) {
-  if (project.items.length >= 500) return status("このページには500個まで要素を追加できます。");
+function makeRegion(type) {
+  const preset = regionPresets[type];
+  const position = name => {
+    const [height,size,padding] = preset[name];
+    const y = type === "footer" ? project.heights[name] - height : 0;
+    const box = rect(0,y,widths[name],height,size);
+    box.padding.left = box.padding.right = padding;
+    return box;
+  };
+  return make(type,position("desktop"),position("mobile"),{
+    text:preset.text,color:"#ffffff",fill:type === "footer" ? "#203b2d" : "#225840",bold:type === "header"
+  });
+}
+function makeObject(type,image) {
   const dimensions = {text:[340,86,30,245,76,23],button:[175,52,18,150,45,16],
     image:[320,210,24,260,170,24],shape:[150,120,24,125,104,24]};
   const d = dimensions[type];
@@ -480,6 +529,11 @@ function add(type,image) {
   if (type === "button") Object.assign(item,{color:"#ffffff",bold:true,align:"center",radius:8});
   if (type === "shape") Object.assign(item,{fill:"#dce8d7",radius:8});
   if (image) item.src = image;
+  return item;
+}
+function add(type,image) {
+  if (project.items.length >= 500) return status("このページには500個まで要素を追加できます。");
+  const item = isPageRegion(type) ? makeRegion(type) : makeObject(type,image);
   change(() => { project.items.push(item); selected = item.id; });
 }
 function remove() {
@@ -511,10 +565,16 @@ function moveLayer(step) {
   if (index < 0 || dest < 0 || dest >= project.items.length) return;
   change(() => { [project.items[index],project.items[dest]] = [project.items[dest],project.items[index]]; });
 }
-function offsetGeometry(position,dx,dy,resize) {
+function offsetGeometry(position,dx,dy,resize,fromTop = false) {
   if (resize) {
     position.w = clamp(position.w+dx,16,widths[view]-position.x);
-    position.h = clamp(position.h+dy,16,project.heights[view]-position.y);
+    if (fromTop) {
+      const bottom = position.y + position.h;
+      position.h = clamp(position.h-dy,16,bottom);
+      position.y = bottom-position.h;
+    } else {
+      position.h = clamp(position.h+dy,16,project.heights[view]-position.y);
+    }
   } else {
     position.x = clamp(position.x+dx,0,widths[view]-position.w);
     position.y = clamp(position.y+dy,0,project.heights[view]-position.h);
@@ -527,9 +587,10 @@ sheet.addEventListener("pointerdown",event => {
   event.preventDefault();
   sheet.focus({preventScroll:true});
   const resize = event.target.classList.contains("handle");
+  const fromTop = event.target.classList.contains("from-top");
   select(target.dataset.id);
   const item = itemSelected();
-  gesture = {pointer:event.pointerId,startX:event.clientX,startY:event.clientY,resize,
+  gesture = {pointer:event.pointerId,startX:event.clientX,startY:event.clientY,resize,fromTop,
     position:{...item[view]},view,scale,before:snapshot(),item};
   sheet.setPointerCapture(event.pointerId);
 });
@@ -538,7 +599,7 @@ sheet.addEventListener("pointermove",event => {
   const dx = Math.round((event.clientX-gesture.startX)/gesture.scale);
   const dy = Math.round((event.clientY-gesture.startY)/gesture.scale);
   const position = {...gesture.position};
-  offsetGeometry(position,dx,dy,gesture.resize);
+  offsetGeometry(position,dx,dy,gesture.resize,gesture.fromTop);
   gesture.item[gesture.view] = position;
   const element = sheet.querySelector(".selected");
   Object.assign(element.style,{left:position.x+"px",top:position.y+"px",
@@ -579,20 +640,35 @@ function inlineGeometry(item) {
     ];
   }).join(";");
 }
-function exportItem(item) {
+function exportItem(item,layer) {
   const style = textStyle(item);
   const css = [
     inlineGeometry(item),"color:"+style.color,"font-family:"+style.fontFamily,
     "font-weight:"+style.fontWeight,"text-align:"+style.textAlign,
     "justify-content:"+style.justifyContent,"align-items:"+style.alignItems
   ];
-  if (["button","shape"].includes(item.type)) css.push("background:"+item.fill);
+  if (hasFill(item.type)) css.push("background:"+item.fill);
+  if (layer !== undefined) css.push("z-index:"+layer);
   const tag = itemTag(item);
   const extra = tag === "a" ? ' href="' + htmlEscape(item.href) + '"' : item.type === "shape" ? ' aria-hidden="true"' : "";
   const content = item.type === "image" ?
     '<img src="' + htmlEscape(item.src) + '" alt="' + htmlEscape(item.alt) + '">' : htmlEscape(item.text);
   return '<' + tag + ' class="site-object" id="' + htmlEscape(item.id) + '" style="' +
     htmlEscape(css.join(";")) + '"' + extra + '>' + content + '</' + tag + '>';
+}
+function exportPage() {
+  if (!project.items.some(item => isPageRegion(item.type))) {
+    return ['<main class="site"><div class="page">',...project.items.map(item => exportItem(item)),'</div></main>'];
+  }
+  const sections = {header:[],main:[],footer:[]};
+  project.items.forEach((item,index) => {
+    const section = isPageRegion(item.type) ? item.type : "main";
+    sections[section].push(exportItem(item,index));
+  });
+  return [
+    '<div class="site"><div class="page">',...sections.header,
+    '<main>',...sections.main,'</main>',...sections.footer,'</div></div>'
+  ];
 }
 function exportHTML(includeMetadata = true) {
   if (typeof project.source === "string") return project.source;
@@ -616,9 +692,7 @@ function exportHTML(includeMetadata = true) {
     '@media(max-width:'+pageBreak+'px){.site{width:min(100%,390px)}.page{height:'+asUnit(project.heights.mobile,widths.mobile)+'}.site-object{left:var(--m-x);top:var(--m-y);width:var(--m-w);height:var(--m-h);font-size:var(--m-size);border-radius:var(--m-radius);padding:var(--m-padding);margin:var(--m-margin)}}',
     '</style>',
     '</' + 'head>',
-    '<body><main class="site"><div class="page">',
-    ...project.items.map(exportItem),
-    '</div></main>',
+    '<body>',...exportPage(),
     ...(metadata ? ['<script type="application/json" id="sitecanvas-project">' + embedded + '</' + 'script>'] : []),
     '</' + 'body></' + 'html>'
   ].join("\n");

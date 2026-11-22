@@ -69,23 +69,31 @@ header{min-height:68px;background:#fff;border-bottom:1px solid var(--line);displ
 .inspect-border{border-color:#789db6aa}
 .inspect-padding{border-color:#e6c464ad}
 .inspect-content{background:#71a8db72}
-.canvas-spacing{position:absolute;inset:0;z-index:2;pointer-events:none;--grip-bg:#fff3cf;--grip-ink:#614900}
+.canvas-spacing{position:absolute;inset:0;z-index:2;pointer-events:none}
 .canvas-spacing[data-mode=margin]{--grip-bg:#e7f5e5;--grip-ink:#225840}
 .canvas-spacing-bar{position:absolute;display:flex;align-items:center;gap:3px;padding:3px;border-radius:7px;background:#182b23;color:#fff;pointer-events:auto;white-space:nowrap}
 .canvas-spacing-bar button,.canvas-spacing-grip{border:0;border-radius:4px;font-size:12px}
 .canvas-spacing-bar button{background:transparent;color:inherit;padding:4px 6px}
 .canvas-spacing-bar button[aria-pressed=true]{background:var(--grip-bg);color:var(--grip-ink)}
-.canvas-spacing-grip{position:absolute;transform:translate(-50%,-50%);min-width:30px;padding:3px 5px;white-space:nowrap;background:var(--grip-bg);color:var(--grip-ink);font-variant-numeric:tabular-nums;font-weight:700;box-shadow:0 0 0 1px currentColor;pointer-events:auto;touch-action:none;user-select:none;cursor:ns-resize}
+.canvas-spacing-grip{position:absolute;transform:translate(-50%,-50%);min-width:34px;padding:3px 5px;white-space:nowrap;background:#e7f5e5;color:#225840;font-variant-numeric:tabular-nums;font-weight:700;box-shadow:0 0 0 1px currentColor;pointer-events:auto;touch-action:none;user-select:none;cursor:ns-resize}
+.canvas-spacing-grip[data-mode=padding]{background:#fff3cf;color:#614900}
 .canvas-spacing-grip:is([data-side=left],[data-side=right]){cursor:ew-resize}
-.canvas-spacing-grip::before{content:"↕";margin-right:3px}
-.canvas-spacing-grip:is([data-side=left],[data-side=right])::before{content:"↔"}
+.canvas-spacing-grip::before{content:attr(data-side-label) " "}
 .canvas-spacing-grip.is-dragging{z-index:1;outline:2px solid currentColor}
 .canvas-spacing-controls,.canvas-spacing-grips{display:contents}
-.canvas-spacing[data-compact=true] .canvas-spacing-controls{position:absolute;display:grid;gap:5px;width:max-content;max-width:100%;padding:4px;background:#182b23;border-radius:7px;pointer-events:auto}
-.canvas-spacing[data-compact=true] .canvas-spacing-bar{position:static;padding:0}
+.canvas-spacing-row{position:absolute;display:flex;align-items:center;gap:3px;transform:translate(-50%,-50%);padding:3px;border-radius:6px;background:#ffffffed;box-shadow:0 1px 6px #182b2333;pointer-events:auto;white-space:nowrap}
+.canvas-spacing-row[data-side=top]{flex-direction:column}
+.canvas-spacing-row[data-side=bottom]{flex-direction:column-reverse}
+.canvas-spacing-row[data-side=left]{flex-direction:row-reverse}
+.canvas-spacing-name{font-size:10px;color:#59665e}
+.canvas-spacing-row .canvas-spacing-grip{position:static;transform:none;text-align:center;box-shadow:0 0 0 1px currentColor}
+.canvas-spacing-row[data-side=top] .canvas-spacing-grip,.canvas-spacing-row[data-side=bottom] .canvas-spacing-grip{cursor:ns-resize}
+.canvas-spacing-row[data-side=left] .canvas-spacing-grip,.canvas-spacing-row[data-side=right] .canvas-spacing-grip{cursor:ew-resize}
+.canvas-spacing[data-compact=true] .canvas-spacing-controls{position:absolute;display:grid;gap:4px;width:max-content;max-width:100%;padding:5px;background:#ffffffed;border:1px solid var(--line);border-radius:7px;box-shadow:0 2px 8px #182b2333;pointer-events:auto}
+.canvas-spacing[data-compact=true] .canvas-spacing-bar{position:static;padding:0;background:transparent;color:var(--ink)}
 .canvas-spacing[data-compact=true] .canvas-spacing-grips{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:4px}
-.canvas-spacing[data-compact=true] .canvas-spacing-grip{position:static;transform:none;text-align:left;box-shadow:none}
-.canvas-spacing[data-compact=true] .canvas-spacing-grip::before{content:attr(data-side-label) " "}
+.canvas-spacing[data-compact=true] .canvas-spacing-row{position:static;transform:none;padding:2px;background:transparent;box-shadow:none;justify-content:space-between}
+.canvas-spacing[data-compact=true] .canvas-spacing-row .canvas-spacing-grip{min-width:62px}
 .inspect-tooltip{position:absolute;z-index:1;pointer-events:none;width:245px;padding:9px 10px;border:1px solid #456355;border-radius:8px;background:#182b23;color:#edf6ef;box-shadow:0 4px 15px #14271d50;font-size:12px}
 .inspect-tooltip .inspect-label{color:#b7e7ca;font-weight:700}
 .inspect-label{font-family:ui-monospace,Consolas,monospace;overflow-wrap:anywhere}

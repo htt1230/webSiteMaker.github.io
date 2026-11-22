@@ -93,15 +93,30 @@
         <div id="canvas-spacing" class="canvas-spacing" hidden>
           <div class="canvas-spacing-controls">
             <div class="canvas-spacing-bar" role="group" aria-label="キャンバスの余白編集">
-              <button type="button" data-spacing-mode="padding" aria-pressed="true">Padding</button>
-              <button type="button" data-spacing-mode="margin" aria-pressed="false">Margin</button>
+              <span>余白</span>
               <button type="button" id="close-spacing" aria-label="余白編集を閉じる">×</button>
             </div>
             <div class="canvas-spacing-grips">
-              <button type="button" class="canvas-spacing-grip" data-side="top" data-side-label="上"></button>
-              <button type="button" class="canvas-spacing-grip" data-side="right" data-side-label="右"></button>
-              <button type="button" class="canvas-spacing-grip" data-side="bottom" data-side-label="下"></button>
-              <button type="button" class="canvas-spacing-grip" data-side="left" data-side-label="左"></button>
+              <div class="canvas-spacing-row" data-side="top" data-side-label="上">
+                <span class="canvas-spacing-name">上</span>
+                <button type="button" class="canvas-spacing-grip" data-mode="margin" data-side="top" data-side-label="外"></button>
+                <button type="button" class="canvas-spacing-grip" data-mode="padding" data-side="top" data-side-label="内"></button>
+              </div>
+              <div class="canvas-spacing-row" data-side="right" data-side-label="右">
+                <span class="canvas-spacing-name">右</span>
+                <button type="button" class="canvas-spacing-grip" data-mode="padding" data-side="right" data-side-label="内"></button>
+                <button type="button" class="canvas-spacing-grip" data-mode="margin" data-side="right" data-side-label="外"></button>
+              </div>
+              <div class="canvas-spacing-row" data-side="bottom" data-side-label="下">
+                <span class="canvas-spacing-name">下</span>
+                <button type="button" class="canvas-spacing-grip" data-mode="padding" data-side="bottom" data-side-label="内"></button>
+                <button type="button" class="canvas-spacing-grip" data-mode="margin" data-side="bottom" data-side-label="外"></button>
+              </div>
+              <div class="canvas-spacing-row" data-side="left" data-side-label="左">
+                <span class="canvas-spacing-name">左</span>
+                <button type="button" class="canvas-spacing-grip" data-mode="margin" data-side="left" data-side-label="外"></button>
+                <button type="button" class="canvas-spacing-grip" data-mode="padding" data-side="left" data-side-label="内"></button>
+              </div>
             </div>
           </div>
         </div>

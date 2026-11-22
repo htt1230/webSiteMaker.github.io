@@ -1299,11 +1299,6 @@ function closeCanvasSpacing() {
   canvasSpacingTarget = undefined;
   canvasSpacing.hidden = inspectBox.hidden = true;
 }
-function controlsOverlap(elements) {
-  const boxes = elements.map(element => element.getBoundingClientRect());
-  return boxes.some((a,index) => boxes.slice(index+1).some(b =>
-    a.left < b.right+3 && a.right+3 > b.left && a.top < b.bottom+3 && a.bottom+3 > b.top));
-}
 function refreshCanvasSpacing() {
   if (!canvasSpacingTarget) return;
   const tags = tagCanvas();
@@ -1323,61 +1318,56 @@ function refreshCanvasSpacing() {
   const css = element.ownerDocument.defaultView.getComputedStyle(element);
   paintInspection(box,css);
   inspectTooltip.hidden = true;
-  const key = canvasSpacingTarget.key;
-  canvasSpacing.dataset.mode = key;
-  for (const button of spacingBar.querySelectorAll("[data-spacing-mode]")) {
-    button.setAttribute("aria-pressed",String(button.dataset.spacingMode === key));
-  }
   for (const grip of spacingGrips) {
-    const side = grip.dataset.side;
-    const value = css.getPropertyValue(key+"-"+side);
+    const side = grip.dataset.side, mode = grip.dataset.mode;
+    const value = css.getPropertyValue(mode+"-"+side);
     grip.textContent = value;
-    grip.title = key+" "+sides[side]+" "+value+" · ドラッグで調整";
+    grip.title = mode+" "+sides[side]+" "+value+" · ドラッグで調整";
     grip.setAttribute("aria-label",grip.title);
   }
   if (dragging) return;
-  canvasSpacing.dataset.compact = "false";
-  const edge = (side,position,sign) => {
-    const space = parseFloat(css.getPropertyValue(key+"-"+side)) || 0;
+  const spacingEdge = (mode,side,position,sign) => {
+    const space = parseFloat(css.getPropertyValue(mode+"-"+side)) || 0;
     const border = parseFloat(css.getPropertyValue("border-"+side+"-width")) || 0;
-    return (position + (key === "margin" ? sign*space : -sign*(space+border)))*scale;
+    const offset = mode === "margin" ? sign*space : -sign*(space+border);
+    return position+offset;
   };
   const x = clamp((box.left+box.right)*scale/2,20,Math.max(20,w-20));
   const y = clamp((box.top+box.bottom)*scale/2,13,Math.max(13,h-13));
   const points = {
-    top:[x,Math.min(edge("top",box.top,-1),y-24)],
-    right:[Math.max(edge("right",box.right,1),x+40),y],
-    bottom:[x,Math.max(edge("bottom",box.bottom,1),y+24)],
-    left:[Math.min(edge("left",box.left,-1),x-40),y]
+    "margin-top":[x,spacingEdge("margin","top",box.top,-1)-10],
+    "padding-top":[x,spacingEdge("padding","top",box.top,-1)+10],
+    "margin-right":[spacingEdge("margin","right",box.right,1)+18,y],
+    "padding-right":[spacingEdge("padding","right",box.right,1)-18,y],
+    "margin-bottom":[x,spacingEdge("margin","bottom",box.bottom,1)+10],
+    "padding-bottom":[x,spacingEdge("padding","bottom",box.bottom,1)-10],
+    "margin-left":[spacingEdge("margin","left",box.left,-1)-18,y],
+    "padding-left":[spacingEdge("padding","left",box.left,-1)+18,y]
   };
   for (const grip of spacingGrips) {
-    const [left,top] = points[grip.dataset.side];
-    const half = grip.offsetWidth/2;
-    grip.style.left = clamp(left,half,Math.max(half,w-half))+"px";
-    grip.style.top = clamp(top,10,Math.max(10,h-10))+"px";
+    const point = points[grip.dataset.mode+"-"+grip.dataset.side];
+    const row = canvasSpacing.querySelector('.canvas-spacing-row[data-side="'+grip.dataset.side+'"]');
+    Object.assign(row.style,{left:clamp(point[0]*scale,18,w-18)+"px",top:clamp(point[1]*scale,18,h-18)+"px"});
   }
-  const above = box.top*scale-spacingBar.offsetHeight-21;
-  spacingBar.style.left = clamp(x-spacingBar.offsetWidth/2,0,Math.max(0,w-spacingBar.offsetWidth))+"px";
-  spacingBar.style.top = clamp(above >= 0 ? above : box.bottom*scale+22,0,Math.max(0,h-spacingBar.offsetHeight))+"px";
-  if (controlsOverlap([spacingBar,...spacingGrips])) {
-    canvasSpacing.dataset.compact = "true";
-    const top = box.top*scale-spacingControls.offsetHeight-8;
+  canvasSpacing.dataset.compact = "false";
+  for (const row of canvasSpacing.querySelectorAll(".canvas-spacing-row")) {
+    const [left,top,width,height] = [row.offsetLeft-row.offsetWidth/2,row.offsetTop-row.offsetHeight/2,row.offsetWidth,row.offsetHeight];
+    if (left < 0 || top < 0 || left+width > w || top+height > h) canvasSpacing.dataset.compact = "true";
+  }
+  if (canvasSpacing.dataset.compact === "true") {
     spacingControls.style.left = clamp(x-spacingControls.offsetWidth/2,0,Math.max(0,w-spacingControls.offsetWidth))+"px";
-    spacingControls.style.top = clamp(top >= 0 ? top : box.bottom*scale+8,0,Math.max(0,h-spacingControls.offsetHeight))+"px";
+    spacingControls.style.top = clamp(y-spacingControls.offsetHeight/2,0,Math.max(0,h-spacingControls.offsetHeight))+"px";
+    for (const row of canvasSpacing.querySelectorAll(".canvas-spacing-row")) {
+      row.style.left = ""; row.style.top = "";
+    }
   }
 }
-spacingBar.addEventListener("click",event => {
-  const button = event.target.closest("[data-spacing-mode]");
-  if (!button || !canvasSpacingTarget) return;
-  canvasSpacingTarget.key = button.dataset.spacingMode;
-  refreshCanvasSpacing();
-});
 byId("close-spacing").addEventListener("click",closeCanvasSpacing);
 for (const grip of spacingGrips) {
   const inputFor = () => canvasSpacingTarget && properties.querySelector(
-    '[data-spacing="'+canvasSpacingTarget.key+'-'+grip.dataset.side+'"]');
+    '[data-spacing="'+grip.dataset.mode+'-'+grip.dataset.side+'"]');
   grip.addEventListener("pointerdown",event => {
-    if (canvasSpacingTarget) startSpacingDrag(event,grip,inputFor(),canvasSpacingTarget.key,grip.dataset.side,canvasSpacingElement,scale);
+    if (canvasSpacingTarget) startSpacingDrag(event,grip,inputFor(),grip.dataset.mode,grip.dataset.side,canvasSpacingElement,scale);
   });
   grip.addEventListener("click",event => {
     if (event.detail === 0) inputFor()?.focus();

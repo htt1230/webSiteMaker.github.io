@@ -9,6 +9,9 @@ const sourceSheet = byId("source-sheet");
 const sourceOutline = byId("source-outline");
 const inspectBox = byId("inspect-box");
 const inspectTooltip = byId("inspect-tooltip");
+const canvasSpacing = byId("canvas-spacing");
+const spacingBar = canvasSpacing.querySelector(".canvas-spacing-bar");
+const spacingGrips = Array.from(canvasSpacing.querySelectorAll(".canvas-spacing-grip"));
 const inspectToggle = byId("inspect-toggle");
 const sourceResize = byId("source-resize");
 const sourceCode = byId("source-code");
@@ -47,6 +50,7 @@ let inspectedPath = null;
 let hoveredElement = null;
 let sourceResizeGesture;
 let spacingGesture;
+let canvasSpacingTarget;
 const inspectorSections = new Map();
 
 function id() {
@@ -345,6 +349,7 @@ function fit() {
   }
   shell.style.width = widths[view] * scale + "px";
   shell.style.height = project.heights[view] * scale + "px";
+  refreshCanvasSpacing();
   byId("stage-size").textContent = widths[view] + " × " + project.heights[view] + " px · " + Math.round(scale * 100) + "%";
 }
 function renderLayers() {
@@ -472,6 +477,7 @@ function boxModel(spacingField,visibleElement) {
       edge.dataset.side = side;
       const control = spacingField(key,side);
       const input = control.querySelector("input");
+      input.dataset.spacing = key + "-" + side;
       control.firstChild.remove();
       if (input.type === "number") input.addEventListener("keydown",event => {
         if (event.key === "Enter" && !event.isComposing) input.dispatchEvent(new Event("change",{bubbles:true}));
@@ -506,8 +512,8 @@ function boxModel(spacingField,visibleElement) {
   box.append(hint,diagram);
   return box;
 }
-function startSpacingDrag(event,arrow,input,key,side,visibleElement) {
-  if (event.button !== 0 || !event.isPrimary || spacingGesture || sourceResizeGesture || codeDirty()) return;
+function startSpacingDrag(event,arrow,input,key,side,visibleElement,unitScale = 1) {
+  if (!input || event.button !== 0 || !event.isPrimary || spacingGesture || sourceResizeGesture || codeDirty()) return;
   event.preventDefault();
   arrow.focus({preventScroll:true});
   const element = visibleElement();
@@ -518,9 +524,9 @@ function startSpacingDrag(event,arrow,input,key,side,visibleElement) {
   const css = element.ownerDocument.defaultView.getComputedStyle(element);
   const layer = !tagCanvas() || inspectedItem(element);
   spacingGesture = {
-    pointer:event.pointerId,arrow,input,element,property,vertical,start:vertical ? event.clientY : event.clientX,
+    pointer:event.pointerId,arrow,input,element,property,vertical,unitScale,start:vertical ? event.clientY : event.clientX,
     direction:key === "margin" ? outward : -outward,minimum:key !== "margin" ? 0 : layer ? -8000 : -Infinity,
-    maximum:layer ? 8000 : Infinity,
+    maximum:layer ? 8000 : Infinity,integer:Boolean(layer),
     initial:parseFloat(css.getPropertyValue(property)) || 0,initialInput:input.value,
     original:element.getAttribute("style"),priority:element.style.getPropertyPriority(property),changed:false
   };
@@ -532,8 +538,9 @@ function startSpacingDrag(event,arrow,input,key,side,visibleElement) {
 window.addEventListener("pointermove",event => {
   const drag = spacingGesture;
   if (drag?.pointer !== event.pointerId || !drag.element.isConnected || !drag.input.isConnected) return;
-  const delta = Math.round(((drag.vertical ? event.clientY : event.clientX)-drag.start)*drag.direction);
-  const amount = clamp(Math.round(drag.initial+delta),drag.minimum,drag.maximum);
+  const delta = Math.round(((drag.vertical ? event.clientY : event.clientX)-drag.start)*drag.direction/drag.unitScale);
+  const next = drag.initial+delta;
+  const amount = clamp(drag.integer ? Math.round(next) : next,drag.minimum,drag.maximum);
   drag.changed = delta !== 0 && amount !== drag.initial;
   if (drag.changed) {
     drag.input.value = String(amount);
@@ -543,14 +550,12 @@ window.addEventListener("pointermove",event => {
     restoreDragPreview(drag);
   }
   if (tagCanvas()) highlightSource();
-  const box = drag.element.getBoundingClientRect();
-  const origin = sheet.getBoundingClientRect();
-  const relative = tagCanvas() ? box : {
-    left:(box.left-origin.left)/scale, top:(box.top-origin.top)/scale,
-    right:(box.right-origin.left)/scale, bottom:(box.bottom-origin.top)/scale
-  };
-  paintInspection(relative,drag.element.ownerDocument.defaultView.getComputedStyle(drag.element));
-  inspectBox.hidden = false;
+  if (canvasSpacingTarget) {
+    if (!tagCanvas()) refreshCanvasSpacing();
+  } else {
+    paintInspection(canvasBox(drag.element),drag.element.ownerDocument.defaultView.getComputedStyle(drag.element));
+    inspectBox.hidden = false;
+  }
 });
 function finishSpacingDrag(cancelled) {
   const drag = spacingGesture;
@@ -562,6 +567,7 @@ function finishSpacingDrag(cancelled) {
   if (drag.arrow.hasPointerCapture(drag.pointer)) drag.arrow.releasePointerCapture(drag.pointer);
   inspectBox.hidden = true;
   if (tagCanvas()) highlightSource();
+  else refreshCanvasSpacing();
   if (cancelled || !drag.changed || !drag.element.isConnected || !drag.input.isConnected) {
     drag.input.value = drag.initialInput;
     return;
@@ -803,6 +809,13 @@ function finishGesture(event,cancelled) {
 sheet.addEventListener("pointerup",event => finishGesture(event,false));
 sheet.addEventListener("pointercancel",event => finishGesture(event,true));
 sheet.addEventListener("lostpointercapture",event => finishGesture(event,true));
+sheet.addEventListener("contextmenu",event => {
+  const element = event.target.closest(".object");
+  if (!element || codeDirty()) return;
+  event.preventDefault();
+  select(element.dataset.id);
+  openCanvasSpacing();
+});
 sheet.addEventListener("dblclick",event => {
   if (!event.target.closest(".object")) return;
   const text = properties.querySelector("textarea");
@@ -1121,7 +1134,8 @@ function renderSourceLayers() {
 }
 function highlightSource() {
   const element = sourceElement(sourceDocument,selectedTagPath());
-  showInspection(inspectMode ? hoveredElement : null);
+  showInspection(inspectMode && !canvasSpacingTarget ? hoveredElement : null);
+  refreshCanvasSpacing();
   if (!element) {
     sourceOutline.hidden = sourceResize.hidden = true;
     return;
@@ -1250,9 +1264,106 @@ function boxSize(box) {
   return sizeFormat.format(box.width) + " × " + sizeFormat.format(box.height) + " px";
 }
 function hoverSource(element) {
-  if (!inspectMode || hoveredElement === element) return;
+  if (!inspectMode || canvasSpacingTarget || hoveredElement === element) return;
   hoveredElement = element;
   showInspection(element);
+}
+function canvasBox(element) {
+  const box = element.getBoundingClientRect();
+  if (tagCanvas()) return box;
+  const origin = sheet.getBoundingClientRect();
+  return {
+    left:(box.left-origin.left)/scale, top:(box.top-origin.top)/scale,
+    right:(box.right-origin.left)/scale, bottom:(box.bottom-origin.top)/scale
+  };
+}
+function canvasSpacingElement() {
+  if (!canvasSpacingTarget || canvasSpacingTarget.tags !== tagCanvas()) return null;
+  if (tagCanvas()) {
+    return canvasSpacingTarget.selection === selectedTagPath() ? sourceElement(sourceDocument,selectedTagPath()) : null;
+  }
+  return canvasSpacingTarget.selection === selected ? sheet.querySelector(".selected") : null;
+}
+function openCanvasSpacing() {
+  const tags = tagCanvas();
+  const selection = tags ? selectedTagPath() : selected;
+  if (canvasSpacingTarget?.tags !== tags || canvasSpacingTarget.selection !== selection) {
+    canvasSpacingTarget = {tags,selection,key:"padding"};
+  }
+  hoveredElement = null;
+  inspectTooltip.hidden = true;
+  refreshCanvasSpacing();
+}
+function closeCanvasSpacing() {
+  canvasSpacingTarget = undefined;
+  canvasSpacing.hidden = inspectBox.hidden = true;
+}
+function refreshCanvasSpacing() {
+  if (!canvasSpacingTarget) return;
+  const tags = tagCanvas();
+  if (canvasSpacingTarget.tags !== tags || canvasSpacingTarget.selection !== (tags ? selectedTagPath() : selected)) {
+    closeCanvasSpacing();
+    return;
+  }
+  const element = canvasSpacingElement();
+  const box = element && canvasBox(element);
+  const w = shell.clientWidth, h = shell.clientHeight;
+  const visible = box && box.right > Math.max(0,box.left) && box.bottom > Math.max(0,box.top) &&
+    box.left*scale < w && box.top*scale < h;
+  canvasSpacing.hidden = inspectBox.hidden = !visible;
+  if (!visible) return;
+  const css = element.ownerDocument.defaultView.getComputedStyle(element);
+  paintInspection(box,css);
+  inspectTooltip.hidden = true;
+  const key = canvasSpacingTarget.key;
+  canvasSpacing.dataset.mode = key;
+  for (const button of spacingBar.querySelectorAll("[data-spacing-mode]")) {
+    button.setAttribute("aria-pressed",String(button.dataset.spacingMode === key));
+  }
+  const edge = (side,position,sign) => {
+    const space = parseFloat(css.getPropertyValue(key+"-"+side)) || 0;
+    const border = parseFloat(css.getPropertyValue("border-"+side+"-width")) || 0;
+    return (position + (key === "margin" ? sign*space : -sign*(space+border)))*scale;
+  };
+  const x = clamp((box.left+box.right)*scale/2,20,Math.max(20,w-20));
+  const y = clamp((box.top+box.bottom)*scale/2,13,Math.max(13,h-13));
+  const points = {
+    top:[x,Math.min(edge("top",box.top,-1),y-24)],
+    right:[Math.max(edge("right",box.right,1),x+40),y],
+    bottom:[x,Math.max(edge("bottom",box.bottom,1),y+24)],
+    left:[Math.min(edge("left",box.left,-1),x-40),y]
+  };
+  for (const grip of spacingGrips) {
+    const side = grip.dataset.side;
+    const value = css.getPropertyValue(key+"-"+side);
+    const [left,top] = points[side];
+    grip.textContent = value;
+    grip.title = key+" "+sides[side]+" "+value+" · ドラッグで調整";
+    grip.setAttribute("aria-label",grip.title);
+    const half = grip.offsetWidth/2;
+    grip.style.left = clamp(left,half,Math.max(half,w-half))+"px";
+    grip.style.top = clamp(top,10,Math.max(10,h-10))+"px";
+  }
+  const above = box.top*scale-spacingBar.offsetHeight-21;
+  spacingBar.style.left = clamp(x-spacingBar.offsetWidth/2,0,Math.max(0,w-spacingBar.offsetWidth))+"px";
+  spacingBar.style.top = clamp(above >= 0 ? above : box.bottom*scale+22,0,Math.max(0,h-spacingBar.offsetHeight))+"px";
+}
+spacingBar.addEventListener("click",event => {
+  const button = event.target.closest("[data-spacing-mode]");
+  if (!button || !canvasSpacingTarget) return;
+  canvasSpacingTarget.key = button.dataset.spacingMode;
+  refreshCanvasSpacing();
+});
+byId("close-spacing").addEventListener("click",closeCanvasSpacing);
+for (const grip of spacingGrips) {
+  const inputFor = () => canvasSpacingTarget && properties.querySelector(
+    '[data-spacing="'+canvasSpacingTarget.key+'-'+grip.dataset.side+'"]');
+  grip.addEventListener("pointerdown",event => {
+    if (canvasSpacingTarget) startSpacingDrag(event,grip,inputFor(),canvasSpacingTarget.key,grip.dataset.side,canvasSpacingElement,scale);
+  });
+  grip.addEventListener("click",event => {
+    if (event.detail === 0) inputFor()?.focus();
+  });
 }
 function paintInspection(box,css) {
   const lengths = (key,suffix = "") => ["top","right","bottom","left"].map(side => Math.max(0,parseFloat(css.getPropertyValue(key+"-"+side+suffix)) || 0));
@@ -1516,6 +1627,16 @@ sourceSheet.addEventListener("load",() => {
     const element = event.target;
     if (page.body.contains(element) && inspectable(element)) pickSource(pathFor(element));
   },true);
+  page.addEventListener("contextmenu",event => {
+    const element = event.target;
+    if (codeDirty() || !page.body.contains(element) || !inspectable(element)) return;
+    event.preventDefault();
+    pickSource(pathFor(element));
+    openCanvasSpacing();
+  },true);
+  page.addEventListener("keydown",event => {
+    if (event.key === "Escape" && canvasSpacingTarget) closeCanvasSpacing();
+  });
   page.addEventListener("pointerover",event => {
     if (page.body.contains(event.target) && inspectable(event.target)) hoverSource(event.target);
   });
@@ -1723,6 +1844,7 @@ document.addEventListener("keydown",event => {
   }
   if (event.key === "Escape") {
     if (spacingGesture) { finishSpacingDrag(true); return; }
+    if (canvasSpacingTarget) { closeCanvasSpacing(); return; }
     if (sourceResizeGesture) { finishSourceResize(true); return; }
     if (tagCanvas()) pickSource(null);
     else select(null);

@@ -46,6 +46,7 @@ let inspectMode = false;
 let inspectedPath = null;
 let hoveredElement = null;
 let sourceResizeGesture;
+let spacingGesture;
 const inspectorSections = new Map();
 
 function id() {
@@ -455,24 +456,123 @@ function action(text,run) {
   button.addEventListener("click",run);
   return button;
 }
-function boxModel(spacingField) {
-  const label = text => {
-    const title = document.createElement("p");
-    title.className = "box-label";
-    title.textContent = text;
-    return title;
+function boxModel(spacingField,visibleElement) {
+  const band = (key,caption,center) => {
+    const layer = document.createElement("div");
+    layer.className = "box-"+key;
+    const label = document.createElement("p");
+    label.className = "box-label";
+    label.textContent = caption;
+    const diagram = document.createElement("div");
+    diagram.className = "box-diagram";
+    center.classList.add("box-center");
+    for (const [side,name] of Object.entries(sides)) {
+      const edge = document.createElement("div");
+      edge.className = "box-edge";
+      edge.dataset.side = side;
+      const control = spacingField(key,side);
+      const input = control.querySelector("input");
+      control.firstChild.remove();
+      if (input.type === "number") input.addEventListener("keydown",event => {
+        if (event.key === "Enter" && !event.isComposing) input.dispatchEvent(new Event("change",{bubbles:true}));
+      });
+      const arrow = document.createElement("button");
+      arrow.type = "button";
+      arrow.className = "box-arrow";
+      arrow.tabIndex = -1;
+      arrow.title = key + " " + name + "をドラッグして調整";
+      arrow.setAttribute("aria-label",arrow.title);
+      const icon = document.createElement("span");
+      icon.textContent = "↑";
+      icon.setAttribute("aria-hidden","true");
+      arrow.append(icon);
+      arrow.addEventListener("pointerdown",event => startSpacingDrag(event,arrow,input,key,side,visibleElement));
+      edge.append(arrow,control);
+      diagram.append(edge);
+    }
+    diagram.append(center);
+    layer.append(label,diagram);
+    return layer;
   };
-  const spacing = key => [
-    group(spacingField(key,"top"),spacingField(key,"right")),
-    group(spacingField(key,"bottom"),spacingField(key,"left"))
-  ];
-  const padding = document.createElement("div");
-  padding.className = "box-padding";
-  padding.append(label("padding"),...spacing("padding"));
-  const margin = document.createElement("div");
-  margin.className = "box-model";
-  margin.append(label("margin"),...spacing("margin"),padding);
-  return margin;
+  const content = document.createElement("div");
+  content.className = "box-content";
+  content.textContent = "内容";
+  const diagram = band("margin","margin · 外側",band("padding","padding · 内側",content));
+  const hint = document.createElement("p");
+  hint.className = "box-hint";
+  hint.textContent = "矢印をドラッグ · 数値を直接入力";
+  const box = document.createElement("div");
+  box.className = "box-model";
+  box.append(hint,diagram);
+  return box;
+}
+function startSpacingDrag(event,arrow,input,key,side,visibleElement) {
+  if (event.button !== 0 || !event.isPrimary || spacingGesture || sourceResizeGesture || codeDirty()) return;
+  event.preventDefault();
+  arrow.focus({preventScroll:true});
+  const element = visibleElement();
+  if (!element || !arrow.isConnected) return;
+  const vertical = side === "top" || side === "bottom";
+  const outward = side === "top" || side === "left" ? -1 : 1;
+  const property = key + "-" + side;
+  const css = element.ownerDocument.defaultView.getComputedStyle(element);
+  const layer = !tagCanvas() || inspectedItem(element);
+  spacingGesture = {
+    pointer:event.pointerId,arrow,input,element,property,vertical,start:vertical ? event.clientY : event.clientX,
+    direction:key === "margin" ? outward : -outward,minimum:key !== "margin" ? 0 : layer ? -8000 : -Infinity,
+    maximum:layer ? 8000 : Infinity,
+    initial:parseFloat(css.getPropertyValue(property)) || 0,initialInput:input.value,
+    original:element.getAttribute("style"),priority:element.style.getPropertyPriority(property),changed:false
+  };
+  hoveredElement = null;
+  arrow.classList.add("is-dragging");
+  shell.classList.add("resizing");
+  arrow.setPointerCapture(event.pointerId);
+}
+window.addEventListener("pointermove",event => {
+  const drag = spacingGesture;
+  if (drag?.pointer !== event.pointerId || !drag.element.isConnected || !drag.input.isConnected) return;
+  const delta = Math.round(((drag.vertical ? event.clientY : event.clientX)-drag.start)*drag.direction);
+  const amount = clamp(Math.round(drag.initial+delta),drag.minimum,drag.maximum);
+  drag.changed = delta !== 0 && amount !== drag.initial;
+  if (drag.changed) {
+    drag.input.value = String(amount);
+    drag.element.style.setProperty(drag.property,amount+"px",drag.priority);
+  } else {
+    drag.input.value = drag.initialInput;
+    restoreDragPreview(drag);
+  }
+  if (tagCanvas()) highlightSource();
+  const box = drag.element.getBoundingClientRect();
+  const origin = sheet.getBoundingClientRect();
+  const relative = tagCanvas() ? box : {
+    left:(box.left-origin.left)/scale, top:(box.top-origin.top)/scale,
+    right:(box.right-origin.left)/scale, bottom:(box.bottom-origin.top)/scale
+  };
+  paintInspection(relative,drag.element.ownerDocument.defaultView.getComputedStyle(drag.element));
+  inspectBox.hidden = false;
+});
+function finishSpacingDrag(cancelled) {
+  const drag = spacingGesture;
+  if (!drag) return;
+  spacingGesture = undefined;
+  drag.arrow.classList.remove("is-dragging");
+  shell.classList.remove("resizing");
+  restoreDragPreview(drag);
+  if (drag.arrow.hasPointerCapture(drag.pointer)) drag.arrow.releasePointerCapture(drag.pointer);
+  inspectBox.hidden = true;
+  if (tagCanvas()) highlightSource();
+  if (cancelled || !drag.changed || !drag.element.isConnected || !drag.input.isConnected) {
+    drag.input.value = drag.initialInput;
+    return;
+  }
+  if (drag.priority && drag.input.type === "text") drag.input.value += " !important";
+  drag.input.dispatchEvent(new Event("change",{bubbles:true}));
+}
+for (const eventName of ["pointerup","pointercancel","lostpointercapture"]) {
+  window.addEventListener(eventName,event => {
+    if (spacingGesture?.pointer === event.pointerId) finishSpacingDrag(eventName !== "pointerup");
+  });
 }
 function tagName(label) {
   const tag = document.createElement("p");
@@ -541,7 +641,7 @@ function renderProperties() {
   },{min:16,max:maxHeight()});
   const layout = section(
     tagName("<" + itemTag(item) + "> · " + (view === "desktop" ? "PC" : "スマホ") + " · px"),
-    group(w,h),group(x,y),boxModel(spacingField)
+    group(w,h),group(x,y),boxModel(spacingField,() => sheet.querySelector(".selected"))
   );
   layout.addEventListener("change",() => {
     x.querySelector("input").max = widths[view] - position.w;
@@ -1056,12 +1156,12 @@ function resizeCSSSize(element,css,key) {
 function writeResizeStyles(element,values) {
   for (const [key,value] of values) element.style.setProperty(key,value,element.style.getPropertyPriority(key));
 }
-function restoreResizePreview(drag) {
+function restoreDragPreview(drag) {
   if (drag.original === null) drag.element.removeAttribute("style");
   else drag.element.setAttribute("style",drag.original);
 }
 sourceResize.addEventListener("pointerdown",event => {
-  if (event.button !== 0 || !event.isPrimary || sourceResizeGesture || codeDirty()) return;
+  if (event.button !== 0 || !event.isPrimary || sourceResizeGesture || spacingGesture || codeDirty()) return;
   event.preventDefault();
   sourceResize.focus({preventScroll:true});
   const path = selectedTagPath();
@@ -1104,7 +1204,7 @@ window.addEventListener("pointermove",event => {
     if (dy) values.push(["height",Math.max(1,Math.round(drag.height+dy))+"px"]);
     if (drag.inline && values.length) values.push(["display","inline-block"]);
   }
-  restoreResizePreview(drag);
+  restoreDragPreview(drag);
   writeResizeStyles(drag.element,values);
   drag.values = values;
   highlightSource();
@@ -1114,7 +1214,7 @@ function finishSourceResize(cancelled) {
   if (!drag) return;
   sourceResizeGesture = undefined;
   shell.classList.remove("resizing");
-  restoreResizePreview(drag);
+  restoreDragPreview(drag);
   if (sourceResize.hasPointerCapture(drag.pointer)) sourceResize.releasePointerCapture(drag.pointer);
   if (cancelled || !drag.values.length || !resizeStillCurrent(drag)) {
     highlightSource();
@@ -1252,15 +1352,22 @@ function editSourceStyle(path,key,value) {
     return inlineStyleValue(element,key);
   });
 }
-function editInspectedSize(path,key,value) {
+function editInspectedLayout(path,key,value) {
   const item = inspectedItem(sourceElement(sourceDocument,path));
-  const pixels = /^(-?\d+(?:\.\d+)?|-?\.\d+)(?:px)?$/i.exec(value.trim());
-  if (!item || !pixels || Number(pixels[1]) < 0) return editSourceStyle(path,key,value);
+  const pixels = /^([+-]?(?:\d+(?:\.\d*)?|\.\d+))(?:px)?$/i.exec(value.trim());
+  if (!item || !pixels) return editSourceStyle(path,key,value);
+  const size = Number(pixels[1]);
   const position = item[view];
+  const [spacing,side] = key.split("-");
+  if (side) {
+    position[spacing][side] = number(size,position[spacing][side],spacing === "margin" ? -8000 : 0,8000);
+    return position[spacing][side]+"px";
+  }
+  if (size < 0) return editSourceStyle(path,key,value);
   const fromTop = footerAtBottom(item,position);
-  const size = Math.round(Number(pixels[1]));
   const width = key === "width";
-  offsetGeometry(position,width ? size-position.w : 0,width ? 0 : (size-position.h)*(fromTop ? -1 : 1),true,fromTop);
+  const rounded = Math.round(size);
+  offsetGeometry(position,width ? rounded-position.w : 0,width ? 0 : (rounded-position.h)*(fromTop ? -1 : 1),true,fromTop);
   return (width ? position.w : position.h)+"px";
 }
 function inlineStyleValue(element,key) {
@@ -1332,8 +1439,11 @@ function renderSourceProperties() {
     known.add(key);
     const computedValue = computed.getPropertyValue(key);
     const dimension = key === "width" || key === "height";
-    const value = dimension && item ? item[view][key === "width" ? "w" : "h"]+"px" : inlineStyleValue(element,key);
-    const update = dimension ? editInspectedSize : editSourceStyle;
+    const spacing = /^(margin|padding)-(top|right|bottom|left)$/.exec(key);
+    const position = item?.[view];
+    const pixels = dimension ? position?.[key === "width" ? "w" : "h"] : spacing ? position?.[spacing[1]][spacing[2]] : undefined;
+    const value = pixels === undefined ? inlineStyleValue(element,key) : pixels+"px";
+    const update = dimension || spacing ? editInspectedLayout : editSourceStyle;
     const control = field(name,"text",value,entered => update(path,key,entered),{placeholder:computedValue,spellcheck:false});
     const input = control.querySelector("input");
     input.setAttribute("aria-label",accessibleName);
@@ -1355,8 +1465,9 @@ function renderSourceProperties() {
   };
   const dimensions = group(cssField("幅","width"),cssField("高さ","height"));
   dimensions.classList.add("inspector-size");
-  const size = inspectorSection("余白とサイズの制約",false,
-    boxModel((key,side) => cssField(sides[side],key + "-" + side,key + " " + sides[side])),
+  const spacing = boxModel((key,side) => cssField(sides[side],key + "-" + side,key + " " + sides[side]),
+    () => sourceElement(sourceDocument,path));
+  const size = inspectorSection("サイズの制約",false,
     group(cssField("min-width"),cssField("max-width")),
     group(cssField("min-height"),cssField("max-height")),
     cssField("box-sizing","box-sizing","box-sizing",["content-box","border-box"]),cssField("aspect-ratio"));
@@ -1380,11 +1491,11 @@ function renderSourceProperties() {
   const accessibility = inspectorSection("アクセシビリティの目安",false,metricsList(accessibilityInfo(element,computed)));
   const help = document.createElement("p");
   help.className = "help";
-  help.textContent = item ? "幅・高さの px 指定は現在の画面幅のレイヤーに反映します。詳細 CSS の適用で HTML タグ編集に切り替わります。" :
+  help.textContent = item ? "幅・高さ・余白の px 指定は現在の画面幅のレイヤーに反映します。詳細 CSS の適用で HTML タグ編集に切り替わります。" :
     "角をドラッグするか、幅・高さを入力できます。CSS の入力を空欄にすると指定を解除します。";
   const focused = properties.contains(document.activeElement) && document.activeElement.getAttribute("aria-label");
   properties.replaceChildren(tagName(sourceLabel(element)),metricsList([["表示サイズ",boxSize(element.getBoundingClientRect())]]),
-    dimensions,help,position,size,layout,appearance,custom,accessibility);
+    dimensions,spacing,help,position,size,layout,appearance,custom,accessibility);
   if (focused) {
     Array.from(properties.querySelectorAll("input")).find(input => input.getAttribute("aria-label") === focused)?.focus({preventScroll:true});
   }
@@ -1611,6 +1722,7 @@ document.addEventListener("keydown",event => {
     return;
   }
   if (event.key === "Escape") {
+    if (spacingGesture) { finishSpacingDrag(true); return; }
     if (sourceResizeGesture) { finishSourceResize(true); return; }
     if (tagCanvas()) pickSource(null);
     else select(null);

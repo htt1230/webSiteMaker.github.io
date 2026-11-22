@@ -80,6 +80,12 @@ header{min-height:68px;background:#fff;border-bottom:1px solid var(--line);displ
 .canvas-spacing-grip::before{content:"↕";margin-right:3px}
 .canvas-spacing-grip:is([data-side=left],[data-side=right])::before{content:"↔"}
 .canvas-spacing-grip.is-dragging{z-index:1;outline:2px solid currentColor}
+.canvas-spacing-controls,.canvas-spacing-grips{display:contents}
+.canvas-spacing[data-compact=true] .canvas-spacing-controls{position:absolute;display:grid;gap:5px;width:max-content;max-width:100%;padding:4px;background:#182b23;border-radius:7px;pointer-events:auto}
+.canvas-spacing[data-compact=true] .canvas-spacing-bar{position:static;padding:0}
+.canvas-spacing[data-compact=true] .canvas-spacing-grips{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:4px}
+.canvas-spacing[data-compact=true] .canvas-spacing-grip{position:static;transform:none;text-align:left;box-shadow:none}
+.canvas-spacing[data-compact=true] .canvas-spacing-grip::before{content:attr(data-side-label) " "}
 .inspect-tooltip{position:absolute;z-index:1;pointer-events:none;width:245px;padding:9px 10px;border:1px solid #456355;border-radius:8px;background:#182b23;color:#edf6ef;box-shadow:0 4px 15px #14271d50;font-size:12px}
 .inspect-tooltip .inspect-label{color:#b7e7ca;font-weight:700}
 .inspect-label{font-family:ui-monospace,Consolas,monospace;overflow-wrap:anywhere}

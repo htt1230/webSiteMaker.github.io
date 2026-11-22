@@ -10,6 +10,7 @@ const sourceOutline = byId("source-outline");
 const inspectBox = byId("inspect-box");
 const inspectTooltip = byId("inspect-tooltip");
 const canvasSpacing = byId("canvas-spacing");
+const spacingControls = canvasSpacing.querySelector(".canvas-spacing-controls");
 const spacingBar = canvasSpacing.querySelector(".canvas-spacing-bar");
 const spacingGrips = Array.from(canvasSpacing.querySelectorAll(".canvas-spacing-grip"));
 const inspectToggle = byId("inspect-toggle");
@@ -1298,6 +1299,11 @@ function closeCanvasSpacing() {
   canvasSpacingTarget = undefined;
   canvasSpacing.hidden = inspectBox.hidden = true;
 }
+function controlsOverlap(elements) {
+  const boxes = elements.map(element => element.getBoundingClientRect());
+  return boxes.some((a,index) => boxes.slice(index+1).some(b =>
+    a.left < b.right+3 && a.right+3 > b.left && a.top < b.bottom+3 && a.bottom+3 > b.top));
+}
 function refreshCanvasSpacing() {
   if (!canvasSpacingTarget) return;
   const tags = tagCanvas();
@@ -1308,10 +1314,12 @@ function refreshCanvasSpacing() {
   const element = canvasSpacingElement();
   const box = element && canvasBox(element);
   const w = shell.clientWidth, h = shell.clientHeight;
+  const dragging = spacingGrips.includes(spacingGesture?.arrow);
   const visible = box && box.right > Math.max(0,box.left) && box.bottom > Math.max(0,box.top) &&
     box.left*scale < w && box.top*scale < h;
-  canvasSpacing.hidden = inspectBox.hidden = !visible;
-  if (!visible) return;
+  canvasSpacing.hidden = !box || (!visible && !dragging);
+  inspectBox.hidden = !visible;
+  if (canvasSpacing.hidden) return;
   const css = element.ownerDocument.defaultView.getComputedStyle(element);
   paintInspection(box,css);
   inspectTooltip.hidden = true;
@@ -1320,6 +1328,15 @@ function refreshCanvasSpacing() {
   for (const button of spacingBar.querySelectorAll("[data-spacing-mode]")) {
     button.setAttribute("aria-pressed",String(button.dataset.spacingMode === key));
   }
+  for (const grip of spacingGrips) {
+    const side = grip.dataset.side;
+    const value = css.getPropertyValue(key+"-"+side);
+    grip.textContent = value;
+    grip.title = key+" "+sides[side]+" "+value+" · ドラッグで調整";
+    grip.setAttribute("aria-label",grip.title);
+  }
+  if (dragging) return;
+  canvasSpacing.dataset.compact = "false";
   const edge = (side,position,sign) => {
     const space = parseFloat(css.getPropertyValue(key+"-"+side)) || 0;
     const border = parseFloat(css.getPropertyValue("border-"+side+"-width")) || 0;
@@ -1334,12 +1351,7 @@ function refreshCanvasSpacing() {
     left:[Math.min(edge("left",box.left,-1),x-40),y]
   };
   for (const grip of spacingGrips) {
-    const side = grip.dataset.side;
-    const value = css.getPropertyValue(key+"-"+side);
-    const [left,top] = points[side];
-    grip.textContent = value;
-    grip.title = key+" "+sides[side]+" "+value+" · ドラッグで調整";
-    grip.setAttribute("aria-label",grip.title);
+    const [left,top] = points[grip.dataset.side];
     const half = grip.offsetWidth/2;
     grip.style.left = clamp(left,half,Math.max(half,w-half))+"px";
     grip.style.top = clamp(top,10,Math.max(10,h-10))+"px";
@@ -1347,6 +1359,12 @@ function refreshCanvasSpacing() {
   const above = box.top*scale-spacingBar.offsetHeight-21;
   spacingBar.style.left = clamp(x-spacingBar.offsetWidth/2,0,Math.max(0,w-spacingBar.offsetWidth))+"px";
   spacingBar.style.top = clamp(above >= 0 ? above : box.bottom*scale+22,0,Math.max(0,h-spacingBar.offsetHeight))+"px";
+  if (controlsOverlap([spacingBar,...spacingGrips])) {
+    canvasSpacing.dataset.compact = "true";
+    const top = box.top*scale-spacingControls.offsetHeight-8;
+    spacingControls.style.left = clamp(x-spacingControls.offsetWidth/2,0,Math.max(0,w-spacingControls.offsetWidth))+"px";
+    spacingControls.style.top = clamp(top >= 0 ? top : box.bottom*scale+8,0,Math.max(0,h-spacingControls.offsetHeight))+"px";
+  }
 }
 spacingBar.addEventListener("click",event => {
   const button = event.target.closest("[data-spacing-mode]");

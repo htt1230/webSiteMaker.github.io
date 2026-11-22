@@ -91,15 +91,19 @@
         <div id="inspect-tooltip" class="inspect-tooltip" aria-hidden="true" hidden></div>
         <button type="button" id="source-resize" class="source-resize" tabindex="-1" aria-label="ドラッグしてサイズ変更" title="ドラッグしてサイズ変更" hidden></button>
         <div id="canvas-spacing" class="canvas-spacing" hidden>
-          <div class="canvas-spacing-bar" role="group" aria-label="キャンバスの余白編集">
-            <button type="button" data-spacing-mode="padding" aria-pressed="true">Padding</button>
-            <button type="button" data-spacing-mode="margin" aria-pressed="false">Margin</button>
-            <button type="button" id="close-spacing" aria-label="余白編集を閉じる">×</button>
+          <div class="canvas-spacing-controls">
+            <div class="canvas-spacing-bar" role="group" aria-label="キャンバスの余白編集">
+              <button type="button" data-spacing-mode="padding" aria-pressed="true">Padding</button>
+              <button type="button" data-spacing-mode="margin" aria-pressed="false">Margin</button>
+              <button type="button" id="close-spacing" aria-label="余白編集を閉じる">×</button>
+            </div>
+            <div class="canvas-spacing-grips">
+              <button type="button" class="canvas-spacing-grip" data-side="top" data-side-label="上"></button>
+              <button type="button" class="canvas-spacing-grip" data-side="right" data-side-label="右"></button>
+              <button type="button" class="canvas-spacing-grip" data-side="bottom" data-side-label="下"></button>
+              <button type="button" class="canvas-spacing-grip" data-side="left" data-side-label="左"></button>
+            </div>
           </div>
-          <button type="button" class="canvas-spacing-grip" data-side="top"></button>
-          <button type="button" class="canvas-spacing-grip" data-side="right"></button>
-          <button type="button" class="canvas-spacing-grip" data-side="bottom"></button>
-          <button type="button" class="canvas-spacing-grip" data-side="left"></button>
         </div>
       </div>
       <p class="dimensions" id="canvas-help">ドラッグで移動 · 角のつまみでサイズ変更</p>

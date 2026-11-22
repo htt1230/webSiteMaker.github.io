@@ -19,6 +19,7 @@ const spacingAxes = {
   left:{vertical:false,outward:-1,angle:180}
 };
 const spacingGuides = new Map();
+const oppositeSides = {top:"bottom",right:"left",bottom:"top",left:"right"};
 const inspectToggle = byId("inspect-toggle");
 const sourceResize = byId("source-resize");
 const sourceCode = byId("source-code");
@@ -468,72 +469,129 @@ function action(text,run) {
   button.addEventListener("click",run);
   return button;
 }
+function spacingInsets(css,axis,key) {
+  const edges = axis.vertical ? ["top","bottom"] : ["left","right"];
+  return edges.reduce((sum,side) => sum+
+    (parseFloat(css.getPropertyValue(key === "border" ? "border-"+side+"-width" : key+"-"+side)) || 0),0);
+}
+function spacingEdit(element,arrow) {
+  const {mode,side} = arrow.dataset;
+  const axis = spacingAxes[side];
+  const opposite = oppositeSides[side];
+  const css = element.ownerDocument.defaultView.getComputedStyle(element);
+  const item = tagCanvas() ? inspectedItem(element) : itemSelected();
+  const value = edge => item?.[view][mode][edge] ?? (parseFloat(css.getPropertyValue(mode+"-"+edge)) || 0);
+  const width = {vertical:false}, height = {vertical:true};
+  const outerSize = (key,dimension) => resizeCSSSize(element,css,key)+
+    (css.boxSizing === "border-box" ? 0 : spacingInsets(css,dimension,"padding")+spacingInsets(css,dimension,"border"));
+  const size = item ? {width:item[view].w,height:item[view].h} :
+    {width:outerSize("width",width),height:outerSize("height",height)};
+  const pairedArrow = spacingGrips.find(grip => grip.dataset.mode === mode && grip.dataset.side === opposite);
+  return {
+    arrow,pairedArrow,element,mode,side,opposite,axis,item,view,scale,size,
+    box:element.getBoundingClientRect(), initial:value(side), oppositeInitial:value(opposite),
+    paddingBudget:Math.max(0,size[axis.vertical ? "height" : "width"]-spacingInsets(css,axis,"border")-1),
+    direction:mode === "margin" ? axis.outward : -axis.outward,
+    length:Number(arrow.dataset.length), oppositeLength:Number(pairedArrow.dataset.length),
+    original:element.getAttribute("style"), values:[]
+  };
+}
+function previewSpacingEdit(edit,requested,paired) {
+  const {element,mode,side,opposite,item} = edit;
+  restoreDragPreview(edit);
+  const minimum = mode === "padding" ? 0 : item ? -8000 : -Infinity;
+  let maximum = item ? 8000 : Infinity;
+  if (mode === "padding") {
+    const remaining = paired ? edit.paddingBudget/2 : edit.paddingBudget-edit.oppositeInitial;
+    maximum = Math.min(maximum,Math.max(0,item ? Math.floor(remaining) : remaining));
+  }
+  const amount = clamp(requested,minimum,maximum);
+  const values = [];
+  if (amount !== edit.initial) values.push([mode+"-"+side,amount+"px"]);
+  if (paired && amount !== edit.oppositeInitial) values.push([mode+"-"+opposite,amount+"px"]);
+  if (values.length) {
+    writeResizeStyles(element,values);
+    if (!item) {
+      const sameSize = key => Math.abs(element.getBoundingClientRect()[key]-edit.box[key]) < .02;
+      for (const key of ["width","height"]) {
+        if (sameSize(key)) continue;
+        const css = element.ownerDocument.defaultView.getComputedStyle(element);
+        const axis = {vertical:key === "height"};
+        const inset = css.boxSizing === "border-box" ? 0 :
+          spacingInsets(css,axis,"padding")+spacingInsets(css,axis,"border");
+        const dimension = [key,Math.max(0,edit.size[key]-inset)+"px"];
+        writeResizeStyles(element,[dimension]);
+        values.push(dimension);
+      }
+      if (!sameSize("width") || !sameSize("height")) {
+        restoreDragPreview(edit);
+        edit.values = [];
+        return {amount:edit.initial,oppositeAmount:edit.oppositeInitial};
+      }
+    }
+  }
+  edit.values = values;
+  return {amount,oppositeAmount:paired ? amount : edit.oppositeInitial};
+}
 function startSpacingDrag(event,arrow) {
   if (event.button !== 0 || !event.isPrimary || spacingGesture || sourceResizeGesture || codeDirty()) return;
   event.preventDefault();
   arrow.focus({preventScroll:true});
   const element = canvasSpacingElement();
   if (!element) return;
-  const {mode,side} = arrow.dataset;
-  const axis = spacingAxes[side];
-  const property = mode+"-"+side;
-  const css = element.ownerDocument.defaultView.getComputedStyle(element);
-  const item = tagCanvas() ? inspectedItem(element) : itemSelected();
-  const initial = item?.[view][mode][side] ?? (parseFloat(css.getPropertyValue(property)) || 0);
-  spacingGesture = {
-    pointer:event.pointerId, arrow, element, mode, side, property, item, view, scale,
-    axis, start:axis.vertical ? event.clientY : event.clientX,
-    direction:mode === "margin" ? axis.outward : -axis.outward,
-    initial, amount:initial, length:Number(arrow.dataset.length),
-    original:element.getAttribute("style"), priority:element.style.getPropertyPriority(property)
-  };
+  const edit = spacingEdit(element,arrow);
+  spacingGesture = {...edit,pointer:event.pointerId,startedWithShift:event.shiftKey,
+    start:edit.axis.vertical ? event.clientY : event.clientX,moved:false};
   arrow.classList.add("is-dragging");
   shell.classList.add("resizing");
   arrow.setPointerCapture(event.pointerId);
+}
+function moveSpacingArrow(arrow,axis,direction,length,extension) {
+  arrow.style.setProperty(axis.vertical ? "--drag-y" : "--drag-x",extension*direction+"px");
+  drawSpacingArrow(arrow,length+extension);
 }
 window.addEventListener("pointermove",event => {
   const drag = spacingGesture;
   if (drag?.pointer !== event.pointerId || canvasSpacingElement() !== drag.element || view !== drag.view) return;
   const cursor = drag.axis.vertical ? event.clientY : event.clientX;
   const delta = Math.round((cursor-drag.start)*drag.direction/drag.scale);
-  const minimum = drag.mode === "padding" ? 0 : drag.item ? -8000 : -Infinity;
-  drag.amount = clamp(drag.initial+delta,minimum,drag.item ? 8000 : Infinity);
-  const extension = (drag.amount-drag.initial)*drag.scale;
-  drag.arrow.style.setProperty(drag.axis.vertical ? "--drag-y" : "--drag-x",extension*drag.direction+"px");
-  drawSpacingArrow(drag.arrow,drag.length+extension);
-  if (drag.amount === drag.initial) restoreDragPreview(drag);
-  else drag.element.style.setProperty(drag.property,drag.amount+"px",drag.priority);
+  if (!delta && !drag.moved) return;
+  drag.moved = true;
+  const {amount,oppositeAmount} = previewSpacingEdit(drag,drag.initial+delta,event.shiftKey);
+  moveSpacingArrow(drag.arrow,drag.axis,drag.direction,drag.length,(amount-drag.initial)*drag.scale);
+  moveSpacingArrow(drag.pairedArrow,drag.axis,-drag.direction,drag.oppositeLength,(oppositeAmount-drag.oppositeInitial)*drag.scale);
   if (tagCanvas()) highlightSource();
   else refreshCanvasSpacing();
 });
-function finishSpacingDrag(cancelled) {
+function finishSpacingDrag(cancelled,shiftKey = false) {
   const drag = spacingGesture;
   if (!drag) return;
   spacingGesture = undefined;
   drag.arrow.classList.remove("is-dragging");
-  drag.arrow.style.removeProperty("--drag-x");
-  drag.arrow.style.removeProperty("--drag-y");
-  shell.classList.remove("resizing");
-  restoreDragPreview(drag);
-  if (drag.arrow.hasPointerCapture(drag.pointer)) drag.arrow.releasePointerCapture(drag.pointer);
-  if (!cancelled && drag.amount !== drag.initial && view === drag.view && canvasSpacingElement() === drag.element) {
-    if (applyCanvasSpacing(drag.element,drag.mode,drag.side,drag.amount)) return;
+  for (const arrow of [drag.arrow,drag.pairedArrow]) {
+    arrow.style.removeProperty("--drag-x");
+    arrow.style.removeProperty("--drag-y");
   }
+  shell.classList.remove("resizing");
+  if (drag.arrow.hasPointerCapture(drag.pointer)) drag.arrow.releasePointerCapture(drag.pointer);
+  if (!cancelled && view === drag.view && canvasSpacingElement() === drag.element) {
+    if (!drag.moved && (shiftKey || drag.startedWithShift)) previewSpacingEdit(drag,drag.initial,true);
+    if (applyCanvasSpacing(drag)) return;
+  } else restoreDragPreview(drag);
   if (tagCanvas()) highlightSource();
   else refreshCanvasSpacing();
 }
-function applyCanvasSpacing(element,mode,side,value) {
-  const item = tagCanvas() ? inspectedItem(element) : itemSelected();
+function applyCanvasSpacing(edit) {
+  restoreDragPreview(edit);
+  if (!edit.values.length) return false;
   const before = snapshot();
-  if (item) {
-    const spacing = item[view][mode];
-    const next = number(value,spacing[side],mode === "margin" ? -8000 : 0,8000);
-    if (next === spacing[side]) return false;
-    spacing[side] = next;
+  if (edit.item) {
+    for (const [property,value] of edit.values) {
+      const [mode,side] = property.split("-");
+      edit.item[edit.view][mode][side] = parseFloat(value);
+    }
   } else {
-    const property = mode+"-"+side;
-    const priority = element.style.getPropertyPriority(property);
-    updateSourceElementStyle(selectedTagPath(),target => target.style.setProperty(property,value+"px",priority));
+    updateSourceElementStyle(selectedTagPath(),target => writeResizeStyles(target,edit.values));
     if (project.source === before.project.source) return false;
   }
   record(before);
@@ -542,7 +600,7 @@ function applyCanvasSpacing(element,mode,side,value) {
 }
 for (const eventName of ["pointerup","pointercancel","lostpointercapture"]) {
   window.addEventListener(eventName,event => {
-    if (spacingGesture?.pointer === event.pointerId) finishSpacingDrag(eventName !== "pointerup");
+    if (spacingGesture?.pointer === event.pointerId) finishSpacingDrag(eventName !== "pointerup",event.shiftKey);
   });
 }
 function tagName(label) {
@@ -1373,10 +1431,9 @@ for (const grip of spacingGrips) {
     if (!element) return;
     event.preventDefault();
     event.stopPropagation();
-    const css = element.ownerDocument.defaultView.getComputedStyle(element);
-    const current = parseFloat(css.getPropertyValue(mode+"-"+side)) || 0;
-    const next = current+increment*(mode === "margin" ? outward : -outward)*(event.shiftKey ? 10 : 1);
-    if (mode !== "padding" || next >= 0) applyCanvasSpacing(element,mode,side,next);
+    const edit = spacingEdit(element,grip);
+    previewSpacingEdit(edit,edit.initial+increment*(mode === "margin" ? outward : -outward),event.shiftKey);
+    applyCanvasSpacing(edit);
   });
 }
 function paintInspection(box,css) {

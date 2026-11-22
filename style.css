@@ -60,6 +60,9 @@ header{min-height:68px;background:#fff;border-bottom:1px solid var(--line);displ
 .sheet{position:absolute;inset:0 auto auto 0;overflow:hidden;transform-origin:top left;touch-action:none;user-select:none}
 .source-sheet{border:0;background:#fff;touch-action:auto;user-select:auto}
 #source-outline{position:absolute;outline:2px solid #157044;outline-offset:-2px;pointer-events:none}
+.source-resize{position:absolute;z-index:2;width:18px;height:18px;padding:0;transform:translate(-50%,-50%);border:2px solid #16754a;border-radius:4px;background:#fff;cursor:nwse-resize;touch-action:none}
+.source-resize.from-top{cursor:nesw-resize}
+.sheet-shell.resizing .source-sheet{pointer-events:none}
 .inspect-box{position:absolute;inset:0;overflow:hidden;pointer-events:none}
 .inspect-box span{position:absolute;border-style:solid}
 .inspect-margin{border-color:#f7c27599}
@@ -97,7 +100,6 @@ header{min-height:68px;background:#fff;border-bottom:1px solid var(--line);displ
 .field textarea{resize:vertical;min-height:62px}
 .box-model{display:grid;gap:5px;margin:8px 0;padding:6px;border:1px solid #dfc49d;border-radius:8px;background:#fcf1e2}
 .box-padding{display:grid;gap:5px;padding:6px;border:1px solid #b8d1ba;border-radius:6px;background:#e9f4e8}
-.box-size{padding:6px;border:1px solid #b5cbd6;border-radius:5px;background:#edf6fa}
 .box-label{margin:0;font:600 12px/1.35 ui-monospace,Consolas,monospace;color:var(--ink)}
 .box-model .field{margin:0;font-size:12px}
 .box-model .field input{padding:4px;min-height:29px;font-size:13px}
@@ -105,6 +107,7 @@ header{min-height:68px;background:#fff;border-bottom:1px solid var(--line);displ
 .inspector-section{margin-top:12px;border-top:1px solid var(--line);padding-top:9px}
 .inspector-section summary{cursor:pointer;margin-bottom:8px;font-size:14px;font-weight:650}
 .inspector-section:not([open]) summary{margin-bottom:0}
+.inspector-size{margin-top:8px}
 .inspector-custom{display:grid;gap:5px}
 .inspector-custom .field{margin:0}
 .inspector-custom .action{justify-self:start}

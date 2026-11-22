@@ -10,6 +10,7 @@ const sourceOutline = byId("source-outline");
 const inspectBox = byId("inspect-box");
 const inspectTooltip = byId("inspect-tooltip");
 const inspectToggle = byId("inspect-toggle");
+const sourceResize = byId("source-resize");
 const sourceCode = byId("source-code");
 const codePanel = byId("code-panel");
 const codeToggle = byId("code-toggle");
@@ -44,6 +45,7 @@ let pendingField;
 let inspectMode = false;
 let inspectedPath = null;
 let hoveredElement = null;
+let sourceResizeGesture;
 const inspectorSections = new Map();
 
 function id() {
@@ -287,7 +289,7 @@ function renderArt() {
   if (previewSource !== undefined) {
     previewSource = sourceDocument = sourceScroll = undefined;
     sourceSheet.removeAttribute("srcdoc");
-    sourceOutline.hidden = true;
+    sourceOutline.hidden = sourceResize.hidden = true;
     showInspection(null);
   }
   sheet.style.width = widths[view] + "px";
@@ -350,8 +352,8 @@ function renderLayers() {
   byId("add-tools").hidden = usesSource;
   byId("layer-tools").hidden = usesSource;
   byId("layers-tab").textContent = usesSource ? "HTML 要素" : "レイヤー";
-  byId("canvas-help").textContent = inspectMode ? "要素にカーソルを合わせて確認 · クリックで選択" :
-    usesSource ? "キャンバスまたは HTML 要素の一覧から選択" : "ドラッグで移動 · 角のつまみでサイズ変更";
+  byId("canvas-help").textContent = usesSource ? "クリックで選択 · 角のつまみでサイズ変更" :
+    "ドラッグで移動 · 角のつまみでサイズ変更";
   if (usesSource) {
     renderSourceLayers();
     return;
@@ -453,7 +455,7 @@ function action(text,run) {
   button.addEventListener("click",run);
   return button;
 }
-function boxModel(width,height,spacingField) {
+function boxModel(spacingField) {
   const label = text => {
     const title = document.createElement("p");
     title.className = "box-label";
@@ -464,12 +466,9 @@ function boxModel(width,height,spacingField) {
     group(spacingField(key,"top"),spacingField(key,"right")),
     group(spacingField(key,"bottom"),spacingField(key,"left"))
   ];
-  const size = document.createElement("div");
-  size.className = "box-size";
-  size.append(label("サイズ"),group(width,height));
   const padding = document.createElement("div");
   padding.className = "box-padding";
-  padding.append(label("padding"),...spacing("padding"),size);
+  padding.append(label("padding"),...spacing("padding"));
   const margin = document.createElement("div");
   margin.className = "box-model";
   margin.append(label("margin"),...spacing("margin"),padding);
@@ -542,7 +541,7 @@ function renderProperties() {
   },{min:16,max:maxHeight()});
   const layout = section(
     tagName("<" + itemTag(item) + "> · " + (view === "desktop" ? "PC" : "スマホ") + " · px"),
-    group(x,y),boxModel(w,h,spacingField)
+    group(w,h),group(x,y),boxModel(spacingField)
   );
   layout.addEventListener("change",() => {
     x.querySelector("input").max = widths[view] - position.w;
@@ -927,6 +926,10 @@ function tagCanvas() {
 function selectedTagPath() {
   return typeof project.source === "string" ? selected : inspectedPath;
 }
+function inspectedItem(element) {
+  if (!element?.id || typeof project.source === "string") return;
+  return project.items.find(item => item.id === element.id);
+}
 function pickSource(path) {
   if (typeof project.source === "string") {
     select(path);
@@ -935,7 +938,7 @@ function pickSource(path) {
   if (inspectedPath !== path) queueSave();
   inspectedPath = path;
   const target = sourceElement(sourceDocument,path);
-  const id = project.items.find(item => item.id === target?.id)?.id ?? null;
+  const id = inspectedItem(target)?.id ?? null;
   if (selected !== id) { selected = id; queueSave(); }
   renderSourceLayers();
   renderSourceProperties();
@@ -959,7 +962,7 @@ function renderSourceSheet() {
   previewSource = source;
   sourceDocument = undefined;
   hoveredElement = null;
-  sourceOutline.hidden = true;
+  sourceOutline.hidden = sourceResize.hidden = true;
   showInspection(null);
   sourceSheet.srcdoc = previewHTML(previewSource,++previewRevision);
 }
@@ -1020,7 +1023,7 @@ function highlightSource() {
   const element = sourceElement(sourceDocument,selectedTagPath());
   showInspection(inspectMode ? hoveredElement : null);
   if (!element) {
-    sourceOutline.hidden = true;
+    sourceOutline.hidden = sourceResize.hidden = true;
     return;
   }
   const box = element.getBoundingClientRect();
@@ -1030,6 +1033,105 @@ function highlightSource() {
   sourceOutline.hidden = right <= left || bottom <= top;
   Object.assign(sourceOutline.style,{
     left:left*scale+"px",top:top*scale+"px",width:(right-left)*scale+"px",height:(bottom-top)*scale+"px"
+  });
+  const item = inspectedItem(element);
+  const fromTop = item && footerAtBottom(item,item[view]);
+  sourceResize.hidden = sourceOutline.hidden;
+  sourceResize.classList.toggle("from-top",Boolean(fromTop));
+  sourceResize.style.left = right*scale+"px";
+  sourceResize.style.top = (fromTop ? top : bottom)*scale+"px";
+}
+function resizeCSSSize(element,css,key) {
+  const current = css.getPropertyValue(key);
+  if (current.endsWith("px")) return parseFloat(current);
+  const horizontal = key === "width";
+  const box = element.getBoundingClientRect();
+  const borderBox = horizontal ? element.offsetWidth ?? box.width : element.offsetHeight ?? box.height;
+  if (css.boxSizing === "border-box") return borderBox;
+  const edges = horizontal ? ["left","right"] : ["top","bottom"];
+  return Math.max(0,borderBox-edges.reduce((sum,side) => sum+
+    (parseFloat(css.getPropertyValue("padding-"+side)) || 0)+
+    (parseFloat(css.getPropertyValue("border-"+side+"-width")) || 0),0));
+}
+function writeResizeStyles(element,values) {
+  for (const [key,value] of values) element.style.setProperty(key,value,element.style.getPropertyPriority(key));
+}
+function restoreResizePreview(drag) {
+  if (drag.original === null) drag.element.removeAttribute("style");
+  else drag.element.setAttribute("style",drag.original);
+}
+sourceResize.addEventListener("pointerdown",event => {
+  if (event.button !== 0 || !event.isPrimary || sourceResizeGesture || codeDirty()) return;
+  event.preventDefault();
+  sourceResize.focus({preventScroll:true});
+  const path = selectedTagPath();
+  const element = sourceElement(sourceDocument,path);
+  if (!element) return;
+  const item = inspectedItem(element);
+  const css = sourceDocument.defaultView.getComputedStyle(element);
+  sourceResizeGesture = {
+    pointer:event.pointerId,x:event.clientX,y:event.clientY,scale,view,project,path,element,item,
+    original:element.getAttribute("style"),position:item ? {...item[view]} : null,
+    fromTop:item && footerAtBottom(item,item[view]),width:resizeCSSSize(element,css,"width"),
+    height:resizeCSSSize(element,css,"height"),values:[],
+    inline:css.display === "inline" && element.namespaceURI === "http://www.w3.org/1999/xhtml" &&
+      !element.matches("img,input,textarea,select,video,audio,canvas,iframe,embed,object")
+  };
+  hoveredElement = null;
+  showInspection(null);
+  shell.classList.add("resizing");
+  sourceResize.setPointerCapture(event.pointerId);
+});
+function resizeStillCurrent(drag) {
+  return drag.project === project && drag.view === view && drag.element.ownerDocument === sourceDocument &&
+    drag.path === selectedTagPath();
+}
+window.addEventListener("pointermove",event => {
+  const drag = sourceResizeGesture;
+  if (drag?.pointer !== event.pointerId || !resizeStillCurrent(drag)) return;
+  const dx = Math.round((event.clientX-drag.x)/drag.scale);
+  const dy = Math.round((event.clientY-drag.y)/drag.scale);
+  const values = [];
+  if (drag.item) {
+    const next = {...drag.position};
+    offsetGeometry(next,dx,dy,true,drag.fromTop);
+    if (next.w !== drag.position.w) values.push(["width",next.w+"px"]);
+    if (next.h !== drag.position.h) values.push(["height",next.h+"px"]);
+    if (next.y !== drag.position.y) values.push(["top",next.y+"px"]);
+    drag.next = next;
+  } else {
+    if (dx) values.push(["width",Math.max(1,Math.round(drag.width+dx))+"px"]);
+    if (dy) values.push(["height",Math.max(1,Math.round(drag.height+dy))+"px"]);
+    if (drag.inline && values.length) values.push(["display","inline-block"]);
+  }
+  restoreResizePreview(drag);
+  writeResizeStyles(drag.element,values);
+  drag.values = values;
+  highlightSource();
+});
+function finishSourceResize(cancelled) {
+  const drag = sourceResizeGesture;
+  if (!drag) return;
+  sourceResizeGesture = undefined;
+  shell.classList.remove("resizing");
+  restoreResizePreview(drag);
+  if (sourceResize.hasPointerCapture(drag.pointer)) sourceResize.releasePointerCapture(drag.pointer);
+  if (cancelled || !drag.values.length || !resizeStillCurrent(drag)) {
+    highlightSource();
+    return;
+  }
+  const before = snapshot();
+  if (drag.item) drag.item[view] = drag.next;
+  else {
+    updateSourceElementStyle(drag.path,element => writeResizeStyles(element,drag.values));
+    if (project.source === before.project.source) { highlightSource(); return; }
+  }
+  record(before);
+  render();
+}
+for (const eventName of ["pointerup","pointercancel","lostpointercapture"]) {
+  window.addEventListener(eventName,event => {
+    if (sourceResizeGesture?.pointer === event.pointerId) finishSourceResize(eventName !== "pointerup");
   });
 }
 function metricsList(rows) {
@@ -1113,11 +1215,24 @@ function accessibilityInfo(element,css) {
     css.visibility === "visible" && element.getClientRects().length > 0;
   return [["名前",name || "—",true],["ロール",role || "—"],["Tab フォーカス",focusable ? "可" : "不可"]];
 }
-function editSourceStyle(path,key,value) {
+function updateSourceElementStyle(path,update) {
   const page = parseHTML(project.source ?? exportHTML(false));
   const element = sourceElement(page,path);
   if (!element) return "";
   const previous = element.getAttribute("style");
+  const result = update(element);
+  if (element.getAttribute("style") !== previous) {
+    if (!element.style.length) element.removeAttribute("style");
+    const source = serializeHTML(page);
+    if (typeof project.source === "string") project.source = source;
+    else {
+      project = projectFromSource(source,project.fileName);
+      selected = path;
+    }
+  }
+  return result;
+}
+function editSourceStyle(path,key,value) {
   if (!CSS.supports(key,"initial")) {
     status("CSS プロパティ名を確認してください。");
     return "";
@@ -1127,21 +1242,26 @@ function editSourceStyle(path,key,value) {
   const next = /^-?(?:\d+\.?\d*|\.\d+)$/.test(input) && !CSS.supports(key,input) && CSS.supports(key,input+"px") ? input+"px" : input;
   if (next && !CSS.supports(key,next)) {
     status("CSS の値を確認してください。例 24px、2rem、10%");
-    return inlineStyleValue(element,key);
+    const element = sourceElement(sourceDocument,path);
+    return element ? inlineStyleValue(element,key) : "";
   }
-  if (next !== element.style.getPropertyValue(key) || priority !== element.style.getPropertyPriority(key)) {
-    element.style.setProperty(key,next,priority);
-    if (!element.style.length) element.removeAttribute("style");
-    if (element.getAttribute("style") !== previous) {
-      const source = serializeHTML(page);
-      if (typeof project.source === "string") project.source = source;
-      else {
-        project = projectFromSource(source,project.fileName);
-        selected = path;
-      }
+  return updateSourceElementStyle(path,element => {
+    if (next !== element.style.getPropertyValue(key) || priority !== element.style.getPropertyPriority(key)) {
+      element.style.setProperty(key,next,priority);
     }
-  }
-  return inlineStyleValue(element,key);
+    return inlineStyleValue(element,key);
+  });
+}
+function editInspectedSize(path,key,value) {
+  const item = inspectedItem(sourceElement(sourceDocument,path));
+  const pixels = /^(-?\d+(?:\.\d+)?|-?\.\d+)(?:px)?$/i.exec(value.trim());
+  if (!item || !pixels || Number(pixels[1]) < 0) return editSourceStyle(path,key,value);
+  const position = item[view];
+  const fromTop = footerAtBottom(item,position);
+  const size = Math.round(Number(pixels[1]));
+  const width = key === "width";
+  offsetGeometry(position,width ? size-position.w : 0,width ? 0 : (size-position.h)*(fromTop ? -1 : 1),true,fromTop);
+  return (width ? position.w : position.h)+"px";
 }
 function inlineStyleValue(element,key) {
   const value = element.style.getPropertyValue(key);
@@ -1206,12 +1326,15 @@ function renderSourceProperties() {
     return;
   }
   const computed = sourceSheet.contentWindow.getComputedStyle(element);
+  const item = inspectedItem(element);
   const known = new Set();
   const cssField = (name,key = name,accessibleName = name,options) => {
     known.add(key);
     const computedValue = computed.getPropertyValue(key);
-    const control = field(name,"text",inlineStyleValue(element,key),
-      value => editSourceStyle(path,key,value),{placeholder:computedValue,spellcheck:false});
+    const dimension = key === "width" || key === "height";
+    const value = dimension && item ? item[view][key === "width" ? "w" : "h"]+"px" : inlineStyleValue(element,key);
+    const update = dimension ? editInspectedSize : editSourceStyle;
+    const control = field(name,"text",value,entered => update(path,key,entered),{placeholder:computedValue,spellcheck:false});
     const input = control.querySelector("input");
     input.setAttribute("aria-label",accessibleName);
     if (computedValue) input.title = "計算値 " + computedValue;
@@ -1230,9 +1353,10 @@ function renderSourceProperties() {
     });
     return control;
   };
-  const size = inspectorSection("サイズと余白",true,
-    boxModel(cssField("幅","width"),cssField("高さ","height"),
-      (key,side) => cssField(sides[side],key + "-" + side,key + " " + sides[side])),
+  const dimensions = group(cssField("幅","width"),cssField("高さ","height"));
+  dimensions.classList.add("inspector-size");
+  const size = inspectorSection("余白とサイズの制約",false,
+    boxModel((key,side) => cssField(sides[side],key + "-" + side,key + " " + sides[side])),
     group(cssField("min-width"),cssField("max-width")),
     group(cssField("min-height"),cssField("max-height")),
     cssField("box-sizing","box-sizing","box-sizing",["content-box","border-box"]),cssField("aspect-ratio"));
@@ -1256,11 +1380,11 @@ function renderSourceProperties() {
   const accessibility = inspectorSection("アクセシビリティの目安",false,metricsList(accessibilityInfo(element,computed)));
   const help = document.createElement("p");
   help.className = "help";
-  help.textContent = typeof project.source === "string" ? "入力した値をタグの style に適用します。空欄で指定を解除できます。" :
-    "CSS を適用すると HTML タグ編集に切り替わります。元に戻すとレイヤー編集に戻せます。";
+  help.textContent = item ? "幅・高さの px 指定は現在の画面幅のレイヤーに反映します。詳細 CSS の適用で HTML タグ編集に切り替わります。" :
+    "角をドラッグするか、幅・高さを入力できます。CSS の入力を空欄にすると指定を解除します。";
   const focused = properties.contains(document.activeElement) && document.activeElement.getAttribute("aria-label");
   properties.replaceChildren(tagName(sourceLabel(element)),metricsList([["表示サイズ",boxSize(element.getBoundingClientRect())]]),
-    help,position,size,layout,appearance,custom,accessibility);
+    dimensions,help,position,size,layout,appearance,custom,accessibility);
   if (focused) {
     Array.from(properties.querySelectorAll("input")).find(input => input.getAttribute("aria-label") === focused)?.focus({preventScroll:true});
   }
@@ -1487,6 +1611,7 @@ document.addEventListener("keydown",event => {
     return;
   }
   if (event.key === "Escape") {
+    if (sourceResizeGesture) { finishSourceResize(true); return; }
     if (tagCanvas()) pickSource(null);
     else select(null);
     return;

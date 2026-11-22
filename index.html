@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SiteCanvas — HTMLサイトエディター</title>
+<link rel="stylesheet" href="./style.css">
+</head>
+<body>
+<header>
+  <div class="brand"><span class="brand-icon" aria-hidden="true">▧</span>SiteCanvas</div>
+  <div class="top-actions">
+    <button class="action" id="new">新規作成</button>
+    <button class="action" id="open">ファイルを開く</button>
+    <button class="action" id="preview">プレビュー</button>
+    <button class="action primary" id="export">HTMLを書き出す</button>
+  </div>
+</header>
+<main class="editor">
+  <aside class="panel left" aria-label="追加とレイヤー">
+    <h2>要素を追加</h2>
+    <div class="add-grid" id="add-tools">
+      <button class="action" data-add="text"><span class="add-icon" aria-hidden="true">T</span>テキスト</button>
+      <button class="action" data-add="image"><span class="add-icon" aria-hidden="true">▧</span>画像</button>
+      <button class="action" data-add="button"><span class="add-icon" aria-hidden="true">▣</span>ボタン</button>
+      <button class="action" data-add="shape"><span class="add-icon" aria-hidden="true">■</span>四角形</button>
+    </div>
+    <div class="panel-heading layers-title">
+      <h2>レイヤー</h2>
+      <div class="tools">
+        <button class="action icon-button" id="front" title="前面へ一段移動" aria-label="前面へ一段移動">↑</button>
+        <button class="action icon-button" id="back" title="背面へ一段移動" aria-label="背面へ一段移動">↓</button>
+      </div>
+    </div>
+    <div class="layers" id="layers"></div>
+  </aside>
+  <section class="stage" aria-label="キャンバス">
+    <div class="stagebar">
+      <div class="switch" aria-label="編集する画面幅">
+        <button class="action" data-view="desktop" aria-pressed="true">PC</button>
+        <button class="action" data-view="mobile" aria-pressed="false">スマホ</button>
+      </div>
+      <span class="stage-size" id="stage-size"></span>
+      <div class="tools">
+        <button class="action icon-button" id="undo" title="元に戻す" aria-label="元に戻す">↶</button>
+        <button class="action icon-button" id="redo" title="やり直す" aria-label="やり直す">↷</button>
+      </div>
+    </div>
+    <div class="viewport" id="viewport">
+      <div class="sheet-shell" id="shell"><div class="sheet" id="sheet" tabindex="0" aria-label="デザインキャンバス"></div></div>
+      <p class="dimensions">ドラッグで移動 · 右下のつまみでサイズ変更</p>
+    </div>
+  </section>
+  <aside class="panel right" aria-label="プロパティ">
+    <h2 id="properties-title">ページ設定</h2>
+    <div id="properties"></div>
+  </aside>
+</main>
+<input type="file" id="file-open" accept=".html,.htm,text/html" hidden>
+<input type="file" id="file-image" accept="image/png,image/jpeg,image/webp,image/gif,image/avif" hidden>
+<div class="status" id="status" role="status"></div>
+<dialog id="preview-dialog" aria-labelledby="preview-heading">
+  <div class="dialog-bar">
+    <strong id="preview-heading">サイトのプレビュー</strong>
+    <div class="tools">
+      <div class="switch" aria-label="プレビューの幅">
+        <button class="action" data-preview="desktop" aria-pressed="true">PC</button>
+        <button class="action" data-preview="mobile" aria-pressed="false">スマホ</button>
+      </div>
+      <form method="dialog"><button class="action">閉じる</button></form>
+    </div>
+  </div>
+  <div class="preview-frame" id="preview-frame"><iframe title="サイトのプレビュー" sandbox></iframe></div>
+</dialog>
+<script src="./script.js" defer></script>
+</body>
+</html>

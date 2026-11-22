@@ -91,33 +91,18 @@
         <div id="inspect-tooltip" class="inspect-tooltip" aria-hidden="true" hidden></div>
         <button type="button" id="source-resize" class="source-resize" tabindex="-1" aria-label="ドラッグしてサイズ変更" title="ドラッグしてサイズ変更" hidden></button>
         <div id="canvas-spacing" class="canvas-spacing" hidden>
-          <div class="canvas-spacing-controls">
-            <div class="canvas-spacing-bar" role="group" aria-label="キャンバスの余白編集">
-              <span>余白</span>
-              <button type="button" id="close-spacing" aria-label="余白編集を閉じる">×</button>
-            </div>
-            <div class="canvas-spacing-grips">
-              <div class="canvas-spacing-row" data-side="top">
-                <button type="button" class="canvas-spacing-grip" data-mode="margin" data-side="top"></button>
-                <button type="button" class="canvas-spacing-grip" data-mode="padding" data-side="top"></button>
-              </div>
-              <div class="canvas-spacing-row" data-side="right">
-                <button type="button" class="canvas-spacing-grip" data-mode="padding" data-side="right"></button>
-                <button type="button" class="canvas-spacing-grip" data-mode="margin" data-side="right"></button>
-              </div>
-              <div class="canvas-spacing-row" data-side="bottom">
-                <button type="button" class="canvas-spacing-grip" data-mode="padding" data-side="bottom"></button>
-                <button type="button" class="canvas-spacing-grip" data-mode="margin" data-side="bottom"></button>
-              </div>
-              <div class="canvas-spacing-row" data-side="left">
-                <button type="button" class="canvas-spacing-grip" data-mode="margin" data-side="left"></button>
-                <button type="button" class="canvas-spacing-grip" data-mode="padding" data-side="left"></button>
-              </div>
-            </div>
-          </div>
+          <button type="button" class="canvas-spacing-grip" data-mode="margin" data-side="top"></button>
+          <button type="button" class="canvas-spacing-grip" data-mode="padding" data-side="top"></button>
+          <button type="button" class="canvas-spacing-grip" data-mode="margin" data-side="right"></button>
+          <button type="button" class="canvas-spacing-grip" data-mode="padding" data-side="right"></button>
+          <button type="button" class="canvas-spacing-grip" data-mode="margin" data-side="bottom"></button>
+          <button type="button" class="canvas-spacing-grip" data-mode="padding" data-side="bottom"></button>
+          <button type="button" class="canvas-spacing-grip" data-mode="margin" data-side="left"></button>
+          <button type="button" class="canvas-spacing-grip" data-mode="padding" data-side="left"></button>
+          <button type="button" class="canvas-spacing-close" id="close-spacing" aria-label="余白編集を閉じる">×</button>
         </div>
       </div>
-      <p class="dimensions" id="canvas-help">ドラッグで移動 · 角のつまみでサイズ変更</p>
+      <p class="dimensions" id="canvas-help">ドラッグで移動 · 角のつまみでサイズ変更 · 右クリックで余白調整</p>
     </div>
   </section>
   <aside class="panel right" aria-label="プロパティ">

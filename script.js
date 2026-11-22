@@ -10,9 +10,15 @@ const sourceOutline = byId("source-outline");
 const inspectBox = byId("inspect-box");
 const inspectTooltip = byId("inspect-tooltip");
 const canvasSpacing = byId("canvas-spacing");
-const spacingControls = canvasSpacing.querySelector(".canvas-spacing-controls");
-const spacingBar = canvasSpacing.querySelector(".canvas-spacing-bar");
 const spacingGrips = Array.from(canvasSpacing.querySelectorAll(".canvas-spacing-grip"));
+const spacingClose = byId("close-spacing");
+const spacingAxes = {
+  top:{vertical:true,outward:-1,angle:270},
+  right:{vertical:false,outward:1,angle:0},
+  bottom:{vertical:true,outward:1,angle:90},
+  left:{vertical:false,outward:-1,angle:180}
+};
+const spacingGuides = new Map();
 const inspectToggle = byId("inspect-toggle");
 const sourceResize = byId("source-resize");
 const sourceCode = byId("source-code");
@@ -359,8 +365,8 @@ function renderLayers() {
   byId("add-tools").hidden = usesSource;
   byId("layer-tools").hidden = usesSource;
   byId("layers-tab").textContent = usesSource ? "HTML 要素" : "レイヤー";
-  byId("canvas-help").textContent = usesSource ? "クリックで選択 · 角のつまみでサイズ変更" :
-    "ドラッグで移動 · 角のつまみでサイズ変更";
+  byId("canvas-help").textContent = (usesSource ? "クリックで選択" : "ドラッグで移動") +
+    " · 角のつまみでサイズ変更 · 右クリックで余白調整";
   if (usesSource) {
     renderSourceLayers();
     return;
@@ -462,110 +468,43 @@ function action(text,run) {
   button.addEventListener("click",run);
   return button;
 }
-function boxModel(spacingField,visibleElement) {
-  const band = (key,caption,center) => {
-    const layer = document.createElement("div");
-    layer.className = "box-"+key;
-    const label = document.createElement("p");
-    label.className = "box-label";
-    label.textContent = caption;
-    const diagram = document.createElement("div");
-    diagram.className = "box-diagram";
-    center.classList.add("box-center");
-    for (const [side,name] of Object.entries(sides)) {
-      const edge = document.createElement("div");
-      edge.className = "box-edge";
-      edge.dataset.side = side;
-      const control = spacingField(key,side);
-      const input = control.querySelector("input");
-      input.dataset.spacing = key + "-" + side;
-      control.firstChild.remove();
-      if (input.type === "number") input.addEventListener("keydown",event => {
-        if (event.key === "Enter" && !event.isComposing) input.dispatchEvent(new Event("change",{bubbles:true}));
-      });
-      const arrow = document.createElement("button");
-      arrow.type = "button";
-      arrow.className = "box-arrow";
-      arrow.tabIndex = -1;
-      arrow.title = key + " " + name + "をドラッグして調整";
-      arrow.setAttribute("aria-label",arrow.title);
-      const icon = document.createElement("span");
-      icon.textContent = "↑";
-      icon.setAttribute("aria-hidden","true");
-      arrow.append(icon);
-      arrow.addEventListener("pointerdown",event => startSpacingDrag(event,arrow,input,key,side,visibleElement));
-      edge.append(arrow,control);
-      diagram.append(edge);
-    }
-    diagram.append(center);
-    layer.append(label,diagram);
-    return layer;
-  };
-  const content = document.createElement("div");
-  content.className = "box-content";
-  content.textContent = "内容";
-  const diagram = band("margin","margin · 外側",band("padding","padding · 内側",content));
-  const hint = document.createElement("p");
-  hint.className = "box-hint";
-  hint.textContent = "矢印をドラッグ · 数値を直接入力";
-  const box = document.createElement("div");
-  box.className = "box-model";
-  box.append(hint,diagram);
-  return box;
-}
-function startSpacingDrag(event,arrow,input,key,side,visibleElement,unitScale = 1) {
-  if (!input || event.button !== 0 || !event.isPrimary || spacingGesture || sourceResizeGesture || codeDirty()) return;
+function startSpacingDrag(event,arrow) {
+  if (event.button !== 0 || !event.isPrimary || spacingGesture || sourceResizeGesture || codeDirty()) return;
   event.preventDefault();
   arrow.focus({preventScroll:true});
-  const element = visibleElement();
-  if (!element || !arrow.isConnected) return;
-  const vertical = side === "top" || side === "bottom";
-  const outward = side === "top" || side === "left" ? -1 : 1;
-  const property = key + "-" + side;
+  const element = canvasSpacingElement();
+  if (!element) return;
+  const {mode,side} = arrow.dataset;
+  const axis = spacingAxes[side];
+  const property = mode+"-"+side;
   const css = element.ownerDocument.defaultView.getComputedStyle(element);
-  const layer = !tagCanvas() || inspectedItem(element);
+  const item = tagCanvas() ? inspectedItem(element) : itemSelected();
+  const initial = item?.[view][mode][side] ?? (parseFloat(css.getPropertyValue(property)) || 0);
   spacingGesture = {
-    pointer:event.pointerId,arrow,input,element,property,vertical,unitScale,start:vertical ? event.clientY : event.clientX,
-    direction:key === "margin" ? outward : -outward,minimum:key !== "margin" ? 0 : layer ? -8000 : -Infinity,
-    maximum:layer ? 8000 : Infinity,integer:Boolean(layer),
-    initial:parseFloat(css.getPropertyValue(property)) || 0,initialInput:input.value,
-    original:element.getAttribute("style"),priority:element.style.getPropertyPriority(property),changed:false
+    pointer:event.pointerId, arrow, element, mode, side, property, item, view, scale,
+    axis, start:axis.vertical ? event.clientY : event.clientX,
+    direction:mode === "margin" ? axis.outward : -axis.outward,
+    initial, amount:initial, length:Number(arrow.dataset.length),
+    original:element.getAttribute("style"), priority:element.style.getPropertyPriority(property)
   };
-  if (spacingGrips.includes(arrow)) {
-    spacingGesture.arrowLength = Number(arrow.dataset.length);
-  }
-  hoveredElement = null;
   arrow.classList.add("is-dragging");
   shell.classList.add("resizing");
   arrow.setPointerCapture(event.pointerId);
 }
 window.addEventListener("pointermove",event => {
   const drag = spacingGesture;
-  if (drag?.pointer !== event.pointerId || !drag.element.isConnected || !drag.input.isConnected) return;
-  const delta = Math.round(((drag.vertical ? event.clientY : event.clientX)-drag.start)*drag.direction/drag.unitScale);
-  const next = drag.initial+delta;
-  const amount = clamp(drag.integer ? Math.round(next) : next,drag.minimum,drag.maximum);
-  if (drag.arrowLength !== undefined) {
-    const extension = (amount-drag.initial)*drag.unitScale;
-    const movement = extension*drag.direction;
-    drag.arrow.style.setProperty(drag.vertical ? "--drag-y" : "--drag-x",movement+"px");
-    drawSpacingArrow(drag.arrow,drag.arrowLength+extension);
-  }
-  drag.changed = delta !== 0 && amount !== drag.initial;
-  if (drag.changed) {
-    drag.input.value = String(amount);
-    drag.element.style.setProperty(drag.property,amount+"px",drag.priority);
-  } else {
-    drag.input.value = drag.initialInput;
-    restoreDragPreview(drag);
-  }
+  if (drag?.pointer !== event.pointerId || canvasSpacingElement() !== drag.element || view !== drag.view) return;
+  const cursor = drag.axis.vertical ? event.clientY : event.clientX;
+  const delta = Math.round((cursor-drag.start)*drag.direction/drag.scale);
+  const minimum = drag.mode === "padding" ? 0 : drag.item ? -8000 : -Infinity;
+  drag.amount = clamp(drag.initial+delta,minimum,drag.item ? 8000 : Infinity);
+  const extension = (drag.amount-drag.initial)*drag.scale;
+  drag.arrow.style.setProperty(drag.axis.vertical ? "--drag-y" : "--drag-x",extension*drag.direction+"px");
+  drawSpacingArrow(drag.arrow,drag.length+extension);
+  if (drag.amount === drag.initial) restoreDragPreview(drag);
+  else drag.element.style.setProperty(drag.property,drag.amount+"px",drag.priority);
   if (tagCanvas()) highlightSource();
-  if (canvasSpacingTarget) {
-    if (!tagCanvas()) refreshCanvasSpacing();
-  } else {
-    paintInspection(canvasBox(drag.element),drag.element.ownerDocument.defaultView.getComputedStyle(drag.element));
-    inspectBox.hidden = false;
-  }
+  else refreshCanvasSpacing();
 });
 function finishSpacingDrag(cancelled) {
   const drag = spacingGesture;
@@ -577,15 +516,29 @@ function finishSpacingDrag(cancelled) {
   shell.classList.remove("resizing");
   restoreDragPreview(drag);
   if (drag.arrow.hasPointerCapture(drag.pointer)) drag.arrow.releasePointerCapture(drag.pointer);
-  inspectBox.hidden = true;
+  if (!cancelled && drag.amount !== drag.initial && view === drag.view && canvasSpacingElement() === drag.element) {
+    if (applyCanvasSpacing(drag.element,drag.mode,drag.side,drag.amount)) return;
+  }
   if (tagCanvas()) highlightSource();
   else refreshCanvasSpacing();
-  if (cancelled || !drag.changed || !drag.element.isConnected || !drag.input.isConnected) {
-    drag.input.value = drag.initialInput;
-    return;
+}
+function applyCanvasSpacing(element,mode,side,value) {
+  const item = tagCanvas() ? inspectedItem(element) : itemSelected();
+  const before = snapshot();
+  if (item) {
+    const spacing = item[view][mode];
+    const next = number(value,spacing[side],mode === "margin" ? -8000 : 0,8000);
+    if (next === spacing[side]) return false;
+    spacing[side] = next;
+  } else {
+    const property = mode+"-"+side;
+    const priority = element.style.getPropertyPriority(property);
+    updateSourceElementStyle(selectedTagPath(),target => target.style.setProperty(property,value+"px",priority));
+    if (project.source === before.project.source) return false;
   }
-  if (drag.priority && drag.input.type === "text") drag.input.value += " !important";
-  drag.input.dispatchEvent(new Event("change",{bubbles:true}));
+  record(before);
+  render();
+  return true;
 }
 for (const eventName of ["pointerup","pointercancel","lostpointercapture"]) {
   window.addEventListener(eventName,event => {
@@ -637,16 +590,6 @@ function renderProperties() {
     position[key] = number(value,position[key],min,max());
     return position[key];
   },{min,max:max()});
-  const spacingField = (key,side) => {
-    const spacing = position[key];
-    const min = key === "margin" ? -8000 : 0;
-    const control = field(sides[side],"number",spacing[side],value => {
-      spacing[side] = number(value,spacing[side],min,8000);
-      return spacing[side];
-    },{min,max:8000});
-    control.querySelector("input").setAttribute("aria-label",key + " " + sides[side] + " (px)");
-    return control;
-  };
   const x = geometry("横位置","x",0,() => widths[view]-position.w);
   const y = geometry("縦位置","y",0,() => project.heights[view]-position.h);
   const w = geometry("幅","w",16,() => widths[view]-position.x);
@@ -659,7 +602,7 @@ function renderProperties() {
   },{min:16,max:maxHeight()});
   const layout = section(
     tagName("<" + itemTag(item) + "> · " + (view === "desktop" ? "PC" : "スマホ") + " · px"),
-    group(w,h),group(x,y),boxModel(spacingField,() => sheet.querySelector(".selected"))
+    group(w,h),group(x,y)
   );
   layout.addEventListener("change",() => {
     x.querySelector("input").max = widths[view] - position.w;
@@ -1311,11 +1254,47 @@ function closeCanvasSpacing() {
   canvasSpacing.hidden = inspectBox.hidden = true;
 }
 function drawSpacingArrow(grip,length) {
-  const direction = {right:0,bottom:90,left:180,top:270}[grip.dataset.side];
+  const direction = spacingAxes[grip.dataset.side].angle;
   const reversed = (grip.dataset.mode === "padding") !== (length < 0);
   grip.dataset.length = length;
   grip.style.setProperty("--angle",(direction+(reversed ? 180 : 0))+"deg");
   grip.style.setProperty("--length",Math.max(9,Math.abs(length))+"px");
+}
+function spacingControlPosition(x,y,width,height,occupied,vertical) {
+  const step = 22;
+  const pointAt = (dx,dy) => [clamp(x+dx,10,width-10),clamp(y+dy,10,height-10)];
+  const free = ([left,top]) => occupied.every(([a,b]) => Math.abs(a-left) >= step || Math.abs(b-top) >= step);
+  const preferred = pointAt(0,0);
+  if (free(preferred)) return preferred;
+  for (let distance=step;distance<=step*(occupied.length+1);distance+=step) {
+    for (const sign of [-1,1]) {
+      const across = pointAt(vertical ? sign*distance : 0,vertical ? 0 : sign*distance);
+      if (free(across)) return across;
+      const along = pointAt(vertical ? 0 : sign*distance,vertical ? sign*distance : 0);
+      if (free(along)) return along;
+    }
+  }
+  for (let top=10;top<=height-10;top+=step) {
+    for (let left=10;left<=width-10;left+=step) {
+      if (free([left,top])) return [left,top];
+    }
+  }
+  return preferred;
+}
+function drawSpacingGuide(grip,box,tip,length,direction) {
+  const {side} = grip.dataset;
+  const {vertical} = spacingAxes[side];
+  const [left,top] = tip;
+  const x = vertical ? clamp(left,box.left,box.right) : box[side];
+  const y = vertical ? box[side] : clamp(top,box.top,box.bottom);
+  const dx = left-(vertical ? 0 : direction*length)-x;
+  const dy = top-(vertical ? direction*length : 0)-y;
+  const guide = spacingGuides.get(grip);
+  const distance = Math.hypot(dx,dy);
+  guide.hidden = distance < 1;
+  Object.assign(guide.style,{
+    left:x+"px",top:y+"px",width:distance+"px",transform:"rotate("+Math.atan2(dy,dx)+"rad)"
+  });
 }
 function refreshCanvasSpacing() {
   if (!canvasSpacingTarget) return;
@@ -1327,7 +1306,7 @@ function refreshCanvasSpacing() {
   const element = canvasSpacingElement();
   const box = element && canvasBox(element);
   const w = shell.clientWidth, h = shell.clientHeight;
-  const dragging = spacingGrips.includes(spacingGesture?.arrow);
+  const dragging = Boolean(spacingGesture);
   const visible = box && box.right > Math.max(0,box.left) && box.bottom > Math.max(0,box.top) &&
     box.left*scale < w && box.top*scale < h;
   canvasSpacing.hidden = !box || (!visible && !dragging);
@@ -1336,65 +1315,68 @@ function refreshCanvasSpacing() {
   const css = element.ownerDocument.defaultView.getComputedStyle(element);
   paintInspection(box,css);
   inspectTooltip.hidden = true;
+  const bounds = {left:box.left*scale,top:box.top*scale,right:box.right*scale,bottom:box.bottom*scale};
+  const occupied = [];
   for (const grip of spacingGrips) {
-    const side = grip.dataset.side, mode = grip.dataset.mode;
+    const {side,mode} = grip.dataset;
     const value = css.getPropertyValue(mode+"-"+side);
-    grip.dataset.value = value;
     grip.firstElementChild.textContent = value;
-    grip.title = mode+" "+sides[side]+" "+value+" · ドラッグで調整";
-    grip.setAttribute("aria-label",grip.title);
-  }
-  if (dragging) return;
-  const x = clamp((box.left+box.right)*scale/2,20,Math.max(20,w-20));
-  const y = clamp((box.top+box.bottom)*scale/2,13,Math.max(13,h-13));
-  canvasSpacing.dataset.compact = "false";
-  for (const grip of spacingGrips) {
-    const {mode,side} = grip.dataset;
+    grip.title = mode+" "+sides[side]+" "+value;
+    grip.setAttribute("aria-label",grip.title+" · 矢印キーまたはドラッグで調整");
+    if (dragging) continue;
     const margin = mode === "margin";
-    const vertical = side === "top" || side === "bottom";
-    const outward = side === "top" || side === "left" ? -1 : 1;
+    const {vertical,outward} = spacingAxes[side];
     const direction = margin ? outward : -outward;
     const fraction = (side === "top" || side === "right") === margin ? .27 : .73;
-    const edge = box[side]*scale;
+    const amount = parseFloat(value) || 0;
+    const length = Math.max(18,Math.abs(amount)*scale)*(amount < 0 ? -1 : 1);
     const border = margin ? 0 : (parseFloat(css.getPropertyValue("border-"+side+"-width")) || 0)*scale;
-    const value = parseFloat(grip.dataset.value) || 0;
-    const length = Math.max(22,Math.abs(value)*scale)*(value < 0 ? -1 : 1);
-    const tip = edge+direction*(border+length);
-    const cross = vertical ? (box.left+(box.right-box.left)*fraction)*scale :
-      (box.top+(box.bottom-box.top)*fraction)*scale;
-    grip.style.left = (vertical ? cross : tip)+"px";
-    grip.style.top = (vertical ? tip : cross)+"px";
-    drawSpacingArrow(grip,length);
+    const edge = bounds[side]+direction*border;
+    const along = edge+direction*length;
+    const across = vertical ? bounds.left+(bounds.right-bounds.left)*fraction :
+      bounds.top+(bounds.bottom-bounds.top)*fraction;
+    const tip = spacingControlPosition(vertical ? across : along,vertical ? along : across,w,h,occupied,vertical);
+    occupied.push(tip);
+    grip.style.left = tip[0]+"px";
+    grip.style.top = tip[1]+"px";
+    grip.dataset.align = tip[0] < 35 ? "left" : tip[0] > w-35 ? "right" : "center";
+    const projection = ((vertical ? tip[1] : tip[0])-edge)*direction;
+    const shaft = Math.max(9,projection*Math.sign(length))*Math.sign(length);
+    drawSpacingArrow(grip,shaft);
+    drawSpacingGuide(grip,{...bounds,[side]:edge},tip,shaft,direction);
   }
-  spacingBar.style.left = clamp(box.right*scale+8,0,Math.max(0,w-spacingBar.offsetWidth))+"px";
-  spacingBar.style.top = clamp(box.top*scale-spacingBar.offsetHeight-6,0,Math.max(0,h-spacingBar.offsetHeight))+"px";
-  const frame = shell.getBoundingClientRect();
-  const controls = [spacingBar,...spacingGrips].map(control => control.getBoundingClientRect());
-  const outside = controls.some(rect => rect.left < frame.left || rect.top < frame.top ||
-    rect.right > frame.right || rect.bottom > frame.bottom);
-  const overlaps = controls.some((a,index) => controls.slice(index+1).some(b =>
-    a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top));
-  if (outside || overlaps) canvasSpacing.dataset.compact = "true";
-  if (canvasSpacing.dataset.compact === "true") {
-    const below = box.bottom*scale+8;
-    const top = below+spacingControls.offsetHeight <= h ? below : box.top*scale-spacingControls.offsetHeight-8;
-    spacingControls.style.left = clamp(x-spacingControls.offsetWidth/2,0,Math.max(0,w-spacingControls.offsetWidth))+"px";
-    spacingControls.style.top = clamp(top,0,Math.max(0,h-spacingControls.offsetHeight))+"px";
-    for (const grip of spacingGrips) drawSpacingArrow(grip,18);
+  if (!dragging) {
+    const [left,top] = spacingControlPosition(bounds.right+12,bounds.top-12,w,h,occupied,true);
+    spacingClose.style.left = left+"px";
+    spacingClose.style.top = top+"px";
   }
 }
-byId("close-spacing").addEventListener("click",closeCanvasSpacing);
+spacingClose.addEventListener("click",closeCanvasSpacing);
 for (const grip of spacingGrips) {
+  const guide = document.createElement("span");
+  guide.className = "canvas-spacing-guide";
+  guide.dataset.mode = grip.dataset.mode;
+  guide.setAttribute("aria-hidden","true");
+  canvasSpacing.prepend(guide);
+  spacingGuides.set(grip,guide);
   const value = document.createElement("span");
   value.setAttribute("aria-hidden","true");
   grip.append(value);
-  const inputFor = () => canvasSpacingTarget && properties.querySelector(
-    '[data-spacing="'+grip.dataset.mode+'-'+grip.dataset.side+'"]');
-  grip.addEventListener("pointerdown",event => {
-    if (canvasSpacingTarget) startSpacingDrag(event,grip,inputFor(),grip.dataset.mode,grip.dataset.side,canvasSpacingElement,scale);
-  });
-  grip.addEventListener("click",event => {
-    if (event.detail === 0) inputFor()?.focus();
+  grip.addEventListener("pointerdown",event => startSpacingDrag(event,grip));
+  grip.addEventListener("keydown",event => {
+    const {mode,side} = grip.dataset;
+    const {vertical,outward} = spacingAxes[side];
+    const increment = event.key === (vertical ? "ArrowDown" : "ArrowRight") ? 1 :
+      event.key === (vertical ? "ArrowUp" : "ArrowLeft") ? -1 : 0;
+    if (!increment || codeDirty() || spacingGesture) return;
+    const element = canvasSpacingElement();
+    if (!element) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const css = element.ownerDocument.defaultView.getComputedStyle(element);
+    const current = parseFloat(css.getPropertyValue(mode+"-"+side)) || 0;
+    const next = current+increment*(mode === "margin" ? outward : -outward)*(event.shiftKey ? 10 : 1);
+    if (mode !== "padding" || next >= 0) applyCanvasSpacing(element,mode,side,next);
   });
 }
 function paintInspection(box,css) {
@@ -1495,17 +1477,12 @@ function editSourceStyle(path,key,value) {
     return inlineStyleValue(element,key);
   });
 }
-function editInspectedLayout(path,key,value) {
+function editInspectedSize(path,key,value) {
   const item = inspectedItem(sourceElement(sourceDocument,path));
   const pixels = /^([+-]?(?:\d+(?:\.\d*)?|\.\d+))(?:px)?$/i.exec(value.trim());
   if (!item || !pixels) return editSourceStyle(path,key,value);
   const size = Number(pixels[1]);
   const position = item[view];
-  const [spacing,side] = key.split("-");
-  if (side) {
-    position[spacing][side] = number(size,position[spacing][side],spacing === "margin" ? -8000 : 0,8000);
-    return position[spacing][side]+"px";
-  }
   if (size < 0) return editSourceStyle(path,key,value);
   const fromTop = footerAtBottom(item,position);
   const width = key === "width";
@@ -1582,11 +1559,10 @@ function renderSourceProperties() {
     known.add(key);
     const computedValue = computed.getPropertyValue(key);
     const dimension = key === "width" || key === "height";
-    const spacing = /^(margin|padding)-(top|right|bottom|left)$/.exec(key);
     const position = item?.[view];
-    const pixels = dimension ? position?.[key === "width" ? "w" : "h"] : spacing ? position?.[spacing[1]][spacing[2]] : undefined;
+    const pixels = dimension ? position?.[key === "width" ? "w" : "h"] : undefined;
     const value = pixels === undefined ? inlineStyleValue(element,key) : pixels+"px";
-    const update = dimension || spacing ? editInspectedLayout : editSourceStyle;
+    const update = dimension ? editInspectedSize : editSourceStyle;
     const control = field(name,"text",value,entered => update(path,key,entered),{placeholder:computedValue,spellcheck:false});
     const input = control.querySelector("input");
     input.setAttribute("aria-label",accessibleName);
@@ -1608,8 +1584,6 @@ function renderSourceProperties() {
   };
   const dimensions = group(cssField("幅","width"),cssField("高さ","height"));
   dimensions.classList.add("inspector-size");
-  const spacing = boxModel((key,side) => cssField(sides[side],key + "-" + side,key + " " + sides[side]),
-    () => sourceElement(sourceDocument,path));
   const size = inspectorSection("サイズの制約",false,
     group(cssField("min-width"),cssField("max-width")),
     group(cssField("min-height"),cssField("max-height")),
@@ -1629,7 +1603,9 @@ function renderSourceProperties() {
   const appearance = inspectorSection("文字と見た目",false,cssField("color"),cssField("background-color"),
     group(cssField("font-size"),cssField("line-height")),cssField("font-family"),
     cssField("border"),cssField("border-radius"),cssField("opacity"),cssField("transform"));
-  const extras = Array.from(element.style).filter(key => !known.has(key)).map(key => cssField(key));
+  const extras = Array.from(element.style)
+    .filter(key => !known.has(key) && !/^(margin|padding)(?:-(top|right|bottom|left))?$/.test(key))
+    .map(key => cssField(key));
   const custom = inspectorSection("任意の CSS プロパティ",false,customStyleForm(),...extras);
   const accessibility = inspectorSection("アクセシビリティの目安",false,metricsList(accessibilityInfo(element,computed)));
   const help = document.createElement("p");
@@ -1638,7 +1614,7 @@ function renderSourceProperties() {
     "角をドラッグするか、幅・高さを入力できます。CSS の入力を空欄にすると指定を解除します。";
   const focused = properties.contains(document.activeElement) && document.activeElement.getAttribute("aria-label");
   properties.replaceChildren(tagName(sourceLabel(element)),metricsList([["表示サイズ",boxSize(element.getBoundingClientRect())]]),
-    dimensions,spacing,help,position,size,layout,appearance,custom,accessibility);
+    dimensions,help,position,size,layout,appearance,custom,accessibility);
   if (focused) {
     Array.from(properties.querySelectorAll("input")).find(input => input.getAttribute("aria-label") === focused)?.focus({preventScroll:true});
   }
